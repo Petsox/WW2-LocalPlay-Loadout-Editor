@@ -1,0 +1,6 @@
+# build output (the exe is published on the Releases page)
+*.exe
+*.pdb
+# created by the tool at runtime
+loadouts/
+statstable_full.csv
