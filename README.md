@@ -7,6 +7,8 @@ Use <b>every</b> weapon, camo, attachment, charm and perk in <b>Call of Duty: WW
 and unlock everything in the game's own menus.
 </p>
 
+<p align="center">Made by <b>Petsox</b></p>
+
 ---
 
 In Local Play almost every weapon is locked, because the unlocks come from the online inventory, which isn't
@@ -99,6 +101,13 @@ The menu logic was worked out by decompiling the game's UI scripts with
 }
 ```
 
+### Example classes
+
+The [`loadouts`](loadouts) folder has three ready-made classes: **Commando** (PPSh-41 variant with Chrome Tiger),
+**Sniper** (PTRS-41) and **Ultra Akimbo** (Blyskawica + akimbo Machine Pistol). Copy the folder next to the tool,
+then use **Import class...** → pick a class slot → **Apply to class**. The examples use loot variants and up to 6
+attachments, so run **Load full item list from game** and **Unlock everything in game menus** first.
+
 Field keys: `primary`, `secondary`, `primaryCamo`, `primaryGrip`, `primaryCharm`, `primaryAttachment1`–`6`,
 `secondaryCamo`, `secondaryGrip`, `secondaryCharm`, `secondaryAttachment`, `secondaryAttachment2`–`6`, `lethal`,
 `tactical`, `perk1`–`9`. Only the `id` is used on import; `name` is there for humans.
@@ -121,6 +130,19 @@ Windows (.NET Framework 4) and writes `WW2_LocalPlay_Loadout_Editor.exe` next to
 - The community *WW2 Loadout Editor*, for the command-buffer signature and the `setRankedLoadout` approach.
 - [JariKCoding/CoDLuaDecompiler](https://github.com/JariKCoding/CoDLuaDecompiler), for decompiling the menu scripts.
 - The UnknownCheats *Ultimate CoD WW2* thread, for community research.
+
+## Contributing
+
+Contributions are welcome! Open an issue, or fork the repository and send a pull request. Bug reports are most
+useful with the tool's log text and your game version.
+
+## License
+
+**Source-available. This is not an open-source license.** See [LICENSE](LICENSE). In short:
+
+- ✅ Use the tool, build it yourself, and share **unmodified** official releases for free, with credit to Petsox.
+- ✅ Modify it to **contribute back** to this repository through pull requests.
+- ❌ Don't publish or distribute **modified** versions, don't remove the author credit, and don't sell it.
 
 ## Disclaimer
 

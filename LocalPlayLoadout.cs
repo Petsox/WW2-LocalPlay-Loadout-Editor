@@ -1,4 +1,5 @@
 // WWII Local Play Loadout Editor
+// Copyright (c) 2026 Petsox. Source-available, see LICENSE: contributions welcome, no redistribution of modified versions.
 // Injects setPrivateLoadout / setRankedLoadout commands into the game's command buffer
 // (same mechanism as the community WW2_Loadout_Editor) and can dump the full
 // mp/statstable.csv from game memory so every weapon is selectable.
@@ -500,6 +501,7 @@ namespace LocalPlayLoadout
 
     class MainForm : Form
     {
+        public const string AppVersion = "1.0", Author = "Petsox";
         const int Col0 = 0, ColRef = 1, ColName = 2, ColIcon = 4, ColId = 18;
         static readonly string[] GunTypes = { "weapon_assault", "weapon_smg", "weapon_heavy", "weapon_lmg", "weapon_sniper", "weapon_shotgun", "weapon_pistol", "weapon_projectile" };
 
@@ -546,7 +548,7 @@ namespace LocalPlayLoadout
 
         public MainForm()
         {
-            Text = "WWII Local Play Loadout Editor";
+            Text = "WWII Local Play Loadout Editor " + AppVersion + "  -  made by " + Author;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             Font = new Font("Segoe UI", 9f);
             Width = 1180; Height = 940;
@@ -565,7 +567,8 @@ namespace LocalPlayLoadout
             bUnlockAll = new Button { Text = "Unlock everything in game menus", AutoSize = true };
             bUnlockAll.Click += delegate { UnlockAllClicked(); };
             toolTip.SetToolTip(bUnlockAll, "Unlocks every weapon, melee weapon, camo (incl. Challenges camos), charm and reticle in the game's own Local Play menus.\nMemory only: undone by restarting the game; re-applied automatically while this tool stays open.");
-            top.Controls.AddRange(new Control[] { bConnect, bDump, bUnlockAll, lblStatus });
+            Label lblAuthor = new Label { Text = "made by " + Author, AutoSize = true, Padding = new Padding(18, 7, 0, 0), ForeColor = Color.Gray };
+            top.Controls.AddRange(new Control[] { bConnect, bDump, bUnlockAll, lblStatus, lblAuthor });
             root.Controls.Add(top);
             FlowLayoutPanel actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
             Button bApply = new Button { Text = "Apply to class", AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
@@ -672,6 +675,7 @@ namespace LocalPlayLoadout
             txtLog = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Height = 140, Font = new Font("Consolas", 8.5f) };
             root.Controls.Add(txtLog);
 
+            Log("WWII Local Play Loadout Editor " + AppVersion + " - made by " + Author + ". Offline / Local Play only.");
             DisableWheelOnValueFields(this);
             LoadItemsFromDisk();
 

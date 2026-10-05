@@ -2,5 +2,4 @@
 *.exe
 *.pdb
 # created by the tool at runtime
-loadouts/
 statstable_full.csv

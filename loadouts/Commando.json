@@ -1,0 +1,33 @@
+﻿{
+  "format": "ww2-localplay-class",
+  "version": 1,
+  "name": "Class 1  -  Commando",
+  "extraLethal": null,
+  "extraTactical": null,
+  "fields": {
+    "primary": { "id": "0x102A102", "name": "SMG  |  PPSh-41  - variant 1 (tier 2)" },
+    "secondary": { "id": "0x10A4000", "name": "Launcher  |  DP-28 / Crossbow" },
+    "primaryCamo": { "id": "0x600310", "name": "Camo  |  Chrome Tiger" },
+    "primaryGrip": { "id": "0x0", "name": "(empty)" },
+    "primaryCharm": { "id": "0x7000001", "name": "Charm  |  None" },
+    "primaryAttachment1": { "id": "0x3000390", "name": "Attachment  |  Rapid Fire" },
+    "primaryAttachment2": { "id": "0x30005F0", "name": "Attachment  |  Aperture Sight Type100" },
+    "primaryAttachment3": { "id": "0x30000F0", "name": "Attachment  |  Extended Mag" },
+    "primaryAttachment4": { "id": "0x0", "name": "(empty)" },
+    "secondaryCamo": { "id": "0x0", "name": "(empty)" },
+    "secondaryGrip": { "id": "0x0", "name": "(empty)" },
+    "secondaryCharm": { "id": "0x0", "name": "(empty)" },
+    "secondaryAttachment": { "id": "0x0", "name": "(empty)" },
+    "lethal": { "id": "0x1007000", "name": "Equipment  |  Frag Grenade" },
+    "tactical": { "id": "0x1093000", "name": "Equipment  |  S2 Tactical Insertion Cavalry" },
+    "perk1": { "id": "0x46000AE", "name": "Perk  |  Commando Grandmaster" },
+    "perk2": { "id": "0x0", "name": "(empty)" },
+    "perk3": { "id": "0x0", "name": "(empty)" },
+    "perk4": { "id": "0x4600063", "name": "Perk  |  Rifleman" },
+    "perk5": { "id": "0x4600082", "name": "Perk  |  Energetic" },
+    "perk6": { "id": "0x0", "name": "(empty)" },
+    "perk7": { "id": "0x0", "name": "(empty)" },
+    "perk8": { "id": "0x0", "name": "(empty)" },
+    "perk9": { "id": "0x0", "name": "(empty)" }
+  }
+}

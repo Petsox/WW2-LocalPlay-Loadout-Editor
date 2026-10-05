@@ -1,0 +1,51 @@
+WWII Local Play Loadout Editor - Source-Available License, version 1.0
+
+Copyright (c) 2026 Petsox. All rights reserved, except as expressly granted below.
+
+"Software" means the source code, build scripts, icon, documentation, example files and the
+compiled program published in the official repository:
+    https://github.com/__OWNER__/WW2-LocalPlay-Loadout-Editor
+"Official release" means the Software exactly as published by Petsox in that repository or on its
+Releases page.
+
+1. USE
+   You may download, build and use the Software, free of charge, for personal and non-commercial
+   purposes.
+
+2. MODIFICATION FOR CONTRIBUTIONS
+   You may modify the Software for your own private use, and to prepare contributions to the
+   official repository.
+
+3. CONTRIBUTIONS
+   You may submit your modifications to the official repository (for example as a pull request).
+   By submitting a contribution, you confirm that you have the right to submit it, and you grant
+   Petsox a perpetual, worldwide, non-exclusive, royalty-free, irrevocable license to use, modify,
+   publish and distribute your contribution as part of the Software, under this license or any
+   other terms Petsox chooses.
+
+4. SHARING
+   You may share unmodified official releases, free of charge, as long as this license and the
+   copyright notice stay included and Petsox is credited as the author.
+
+5. RESTRICTIONS
+   You may NOT, without prior written permission from Petsox:
+   a) distribute, publish or otherwise make available modified versions of the Software, or works
+      derived from it, in source or compiled form, except by submitting them as contributions to
+      the official repository under section 3;
+   b) remove or change the author credit ("made by Petsox") or this license;
+   c) sell the Software or include it in any paid product or service.
+   Forking the official repository on GitHub is permitted only to prepare contributions under
+   section 3, and as allowed by GitHub's Terms of Service.
+
+6. NO AFFILIATION
+   The Software is a fan-made tool and is not affiliated with or endorsed by Activision,
+   Sledgehammer Games or any of their partners. "Call of Duty" is a trademark of its respective
+   owner. The Software contains no game files.
+
+7. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT
+   SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING
+   FROM THE USE OF THE SOFTWARE. Use it only in offline Local Play, at your own risk.
+
+8. TERMINATION
+   Any breach of this license automatically ends your rights under it.
