@@ -501,7 +501,7 @@ namespace LocalPlayLoadout
 
     class MainForm : Form
     {
-        public const string AppVersion = "1.0", Author = "Petsox";
+        public const string AppVersion = "1.1", Author = "Petsox";
         const int Col0 = 0, ColRef = 1, ColName = 2, ColIcon = 4, ColId = 18;
         static readonly string[] GunTypes = { "weapon_assault", "weapon_smg", "weapon_heavy", "weapon_lmg", "weapon_sniper", "weapon_shotgun", "weapon_pistol", "weapon_projectile" };
 
@@ -539,7 +539,7 @@ namespace LocalPlayLoadout
         ComboBox cbPriCamo, cbPriCamo2, cbSecCamo, cbSecCamo2, cbPriCharm, cbSecCharm;
         const int AttachmentSlots = 6;
         ComboBox[] cbAtt = new ComboBox[AttachmentSlots], cbSecAtt = new ComboBox[AttachmentSlots];
-        ComboBox cbDevWeapon, cbDevCamo, cbDevReticle;
+        ComboBox cbDevWeapon, cbDevReticle;
         RadioButton rbDevPrimary, rbDevSecondary;
         Button bUnlockAll;
         ComboBox[] cbPerk = new ComboBox[9];
@@ -656,7 +656,6 @@ namespace LocalPlayLoadout
             devTarget.Controls.AddRange(new Control[] { rbDevPrimary, rbDevSecondary });
             AddRow(dg, "Apply to weapon slot:", devTarget);
             cbDevWeapon = Slot(dg, "Hidden weapon:");
-            cbDevCamo = Slot(dg, "Hidden camo:");
             cbDevReticle = Slot(dg, "Test reticle:");
             Button bDevApply = new Button { Text = "Apply dev items to class", AutoSize = true };
             bDevApply.Click += delegate { ApplyDev(); };
@@ -1001,10 +1000,7 @@ namespace LocalPlayLoadout
         {
             if (cbDevWeapon == null) return;
             Fill(cbDevWeapon, i => i.IsDev && i.Base != null && i.Type.StartsWith("weapon_") && !IsCamo(i));
-            Fill(cbDevCamo, i => i.Type != "site_reticle" && IsCamo(i) && i.Type != "grip" && i.Type != "weapon_charm" &&
-                (i.Internal == "testweaponclasscamo" || (devCamos != null && devCamos.Contains(i.Internal))));
             Fill(cbDevReticle, i => i.Type == "site_reticle");
-            if (devCamos == null) toolTip.SetToolTip(cbDevCamo, "Zombie camos appear here once the tool is connected (the camo fix marks them free).");
         }
 
         void ApplyDev()
@@ -1014,7 +1010,6 @@ namespace LocalPlayLoadout
             List<string> fields = new List<string>();
             foreach (KeyValuePair<ComboBox, string> kv in new[] {
                 new KeyValuePair<ComboBox, string>(cbDevWeapon, "weapon"),
-                new KeyValuePair<ComboBox, string>(cbDevCamo, "camo"),
                 new KeyValuePair<ComboBox, string>(cbDevReticle, "reticle") })
             {
                 Item it = kv.Key.SelectedItem as Item;
@@ -1105,6 +1100,46 @@ namespace LocalPlayLoadout
         int unlockPid;
         const int UnlockCols = 12, UnlockRefCol = 0, UnlockTypeCol = 1, UnlockChallengeCol = 3, UnlockLanCol = 10;
 
+        // Offline the camo menu only shows the tabs marked Offline=1 in mp/categories_camo.csv: "Special" (operation 6)
+        // and "Challenges". Loot camos whose statstable Operation (column 52) is another season tab are never shown
+        // offline, so they are moved to operation 6.
+        const int StatsCols = 57, StatsTypeCol = 0, StatsOperationCol = 52;
+
+        int MoveLootCamosToSpecialTab()
+        {
+            int rows; long cells;
+            if (!game.FindStringTable("mp/statstable.csv", StatsCols, out rows, out cells)) { Log("Special tab: stats table not found."); return 0; }
+            byte[] st = game.Read(cells, rows * StatsCols * CellSize);
+            if (st == null) return 0;
+            Dictionary<long, string> cache = new Dictionary<long, string>();
+            Func<int, int, string> cell = (r, c) =>
+            {
+                long p = BitConverter.ToInt64(st, (r * StatsCols + c) * CellSize);
+                string v;
+                if (!cache.TryGetValue(p, out v)) { v = p == 0 ? "" : (game.ReadCString(p, 64) ?? ""); cache[p] = v; }
+                return v;
+            };
+            byte[] donor = null;
+            for (int r = 1; r < rows && donor == null; r++)
+                if (cell(r, StatsTypeCol) == "universal_camo" && cell(r, StatsOperationCol) == "6")
+                {
+                    donor = new byte[CellSize];
+                    Array.Copy(st, (r * StatsCols + StatsOperationCol) * CellSize, donor, 0, CellSize);
+                }
+            if (donor == null) return 0;
+            int moved = 0;
+            for (int r = 1; r < rows; r++)
+            {
+                if (cell(r, StatsTypeCol) != "weapon_class_camo") continue;
+                string op = cell(r, StatsOperationCol);
+                if (op == "" || op == "6") continue;
+                Array.Copy(donor, 0, st, (r * StatsCols + StatsOperationCol) * CellSize, CellSize);
+                moved++;
+            }
+            if (moved > 0 && !game.PatchCode(cells, st)) { Log("Special tab: write failed."); return 0; }
+            return moved;
+        }
+
         string TryApplyUnlockAll()
         {
             string err;
@@ -1159,8 +1194,9 @@ namespace LocalPlayLoadout
                 }
             }
             if (lan + weapons + camos > 0 && !game.PatchCode(cells, arr)) return "write failed";
+            int special = MoveLootCamosToSpecialTab();
             unlockPid = game.Proc.Id;
-            Log(string.Format("Unlock-all applied: dev unlock switch on, {0} items unlocked for Local Play, {1} weapons made equippable, {2} challenge camos made visible. Re-open the Divisions menu to see it.", lan, weapons, camos));
+            Log(string.Format("Unlock-all applied: dev unlock switch on, {0} items unlocked for Local Play, {1} weapons made equippable, {2} challenge camos made visible, {3} loot camos moved into the Special tab. Re-open the Divisions menu to see it.", lan, weapons, camos, special));
             return null;
         }
 

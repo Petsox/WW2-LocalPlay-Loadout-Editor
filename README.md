@@ -39,12 +39,14 @@ writing anything.
 - **Camos that actually load:** every multiplayer camo (patterns, Gold, Diamond, Chrome and the loot camos), filtered
   to what fits the selected weapon. Camos that would freeze the game are fixed automatically (see below).
 - **Unlock everything in game menus (one button):** every weapon, melee weapon, Challenges camo, charm and reticle
-  can be picked in the game's own *Soldier → Divisions* screen.
+  can be picked in the game's own *Soldier → Divisions* screen, and about 80 camos per weapon appear under
+  *Camouflage → Special*. Normally Local Play shows only a handful there, because all the seasonal camo tabs
+  are hidden offline.
 - **Load class from game:** reads the selected class back from the game and fills every field. The class names
   from the game also appear in the class list.
 - **Export / Import:** save a class to a small `.json` file and share it with friends.
-- **Dev & hidden items (experimental):** event Tesla guns, flamethrowers, the riot shield, zombies-only camos, the
-  developers' test camo and test reticle.
+- **Dev & hidden items (experimental):** event Tesla guns, flamethrowers, the riot shield and the developers' test
+  reticle.
 - **Full item list from the game:** reads `mp/statstable.csv` straight from memory, so nothing is missing.
 - Mouse-wheel protection on all dropdowns, so a class can't be changed by accident.
 
@@ -78,7 +80,7 @@ The tool doesn't change any files. Everything happens in the running game's memo
 |---|---|
 | Writing classes | Injects `setPrivateLoadout "privateMatchCustomClasses" <class> ...` into the game's console command buffer (`cmd_textArray`, found by signature, the same method the community *WW2 Loadout Editor* used for online classes). |
 | Camos that freeze the game | Camos without the "free" flag in `mp/camotable.csv` make the game wait for the online inventory, which never answers offline. The tool sets that flag on every camo in memory. Only *generic* camo IDs work, so the tool never sends per-weapon IDs. |
-| Unlock everything | Sets dvar `709` (the developers' unlock-all switch, checked throughout the menu scripts). In `mp/unlocktable.csv` it also sets *UnlockForLANTournament* = 1 on every item, gives post-launch weapons a challenge value (Local Play only lets those be equipped if they have one), and gives mastery/tier camos a basic challenge, so the offline menu shows them under *Challenges*. |
+| Unlock everything | Sets dvar `709` (the developers' unlock-all switch, checked throughout the menu scripts). In `mp/unlocktable.csv` it also sets *UnlockForLANTournament* = 1 on every item, gives post-launch weapons a challenge value (Local Play only lets those be equipped if they have one), and gives mastery/tier camos a basic challenge, so the offline menu shows them under *Challenges*. Offline the camo menu only shows the tabs marked `Offline=1` in `mp/categories_camo.csv` (*Special* and *Challenges*), so loot camos from the hidden seasonal tabs get their statstable *Operation* (column 52) set to Special. |
 | Reading classes | The Local Play classes live in the encrypted "private loadouts" stats buffer. The tool reads it, recovers the per-session XOR key (only 65,536 keys are possible; the right one turns the class fields into valid item IDs), then decodes the classes using the layout from `mp/ddl/privateloadouts.ddl`. |
 
 The menu logic was worked out by decompiling the game's UI scripts with
@@ -123,6 +125,9 @@ Windows (.NET Framework 4) and writes `WW2_LocalPlay_Loadout_Editor.exe` next to
 - Paintjobs are stored in online file slots, so they can't be used offline.
 - Attachment slots 5 and 6 are more than the game's own menu allows. Test them in the Firing Range first.
 - Dev & hidden items may look broken, do nothing, or freeze the game. Test in the Firing Range.
+- Zombies camos (Pack-a-Punch, Red Herring, Ice, the "amp" camos etc.) can't be used in multiplayer. Their textures
+  are only loaded in Zombies mode, so they have no effect on a multiplayer weapon. The developers' test camo freezes
+  the game.
 - Tested on a single game build only (see above).
 
 ## Credits
