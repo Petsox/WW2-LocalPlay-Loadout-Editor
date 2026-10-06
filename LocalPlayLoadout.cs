@@ -159,7 +159,16 @@ namespace LocalPlayLoadout
                     {
                         int len = (int)Math.Min(chunk + overlap, e - p);
                         IntPtr read;
-                        if (!Native.ReadProcessMemory(handle, new IntPtr(p), buf, new IntPtr(len), out read)) continue;
+                        if (!Native.ReadProcessMemory(handle, new IntPtr(p), buf, new IntPtr(len), out read))
+                        {
+                            for (long q = p; q < p + len; q += 0x1000)
+                            {
+                                int pl = (int)Math.Min(0x1000 + overlap, e - q);
+                                if (pl > 0 && Native.ReadProcessMemory(handle, new IntPtr(q), buf, new IntPtr(pl), out read))
+                                    if (!visit(buf, (int)read.ToInt64(), q)) return;
+                            }
+                            continue;
+                        }
                         if (!visit(buf, (int)read.ToInt64(), p)) return;
                     }
                 }
@@ -423,6 +432,49 @@ namespace LocalPlayLoadout
         // known item IDs. A plaintext (currently decrypted) buffer is also accepted.
         public const int PrivateLoadoutsHeader = 22, PrivateLoadoutsSize = 0x9B0;
 
+        // The lobby (party 0, exe+0x8DD8DB0) keeps its selected map as a pointer to an interned string at +0x268
+        // (see the game's SetPartyMapName / GetPartyMapName). Interned strings have an 8-byte header in front:
+        // u16 reference count, u8 1, u8 length incl. NUL, u32 hash. Hidden maps are switched in by pointing the
+        // lobby at that map's interned string and moving one reference from the old string to the new one.
+        const long PartyMapSlot = 0x8DD8DB0 + 0x268;
+
+        public string SetLobbyMap(string mapName)
+        {
+            long slot = ModuleBase + PartyMapSlot, cur;
+            if (!TryReadInt64(slot, out cur) || cur < 0x10000) return "no lobby map found - open a Local Play lobby first";
+            string curName = ReadCString(cur, 64);
+            byte[] curHdr = Read(cur - 8, 8);
+            if (curName == null || curHdr == null || curHdr[2] != 1 || curHdr[3] != curName.Length + 1) return "unexpected lobby map data";
+            if (curName == mapName) return null;
+            long target = FindInternedString(mapName);
+            if (target == 0) return "'" + mapName + "' is not in the game's string pool";
+            byte[] tHdr = Read(target - 8, 2);
+            if (tHdr == null) return "could not read the map string";
+            ushort rcTarget = BitConverter.ToUInt16(tHdr, 0), rcCur = BitConverter.ToUInt16(curHdr, 0);
+            if (!PatchCode(target - 8, BitConverter.GetBytes((ushort)(rcTarget + 1)))) return "write failed";
+            if (!PatchCode(slot, BitConverter.GetBytes(target))) return "write failed";
+            if (rcCur > 1) PatchCode(cur - 8, BitConverter.GetBytes((ushort)(rcCur - 1)));
+            return null;
+        }
+
+        long FindInternedString(string text)
+        {
+            byte[] pat = Encoding.ASCII.GetBytes(text + "\0");
+            long found = 0;
+            ScanMemory(ModuleBase, ModuleBase + ModuleSize, pat.Length + 8, delegate(byte[] buf, int len, long baseAddr)
+            {
+                for (int i = 8; i + pat.Length <= len; i++)
+                {
+                    if (buf[i] != pat[0] || buf[i - 6] != 1 || buf[i - 5] != pat.Length) continue;
+                    int j = 1;
+                    while (j < pat.Length && buf[i + j] == pat[j]) j++;
+                    if (j == pat.Length) { found = baseAddr + i; return false; }
+                }
+                return true;
+            });
+            return found;
+        }
+
         public byte[] ReadPrivateLoadouts(HashSet<uint> knownIds, int[] checkOffsets, out string error)
         {
             error = null;
@@ -501,7 +553,7 @@ namespace LocalPlayLoadout
 
     class MainForm : Form
     {
-        public const string AppVersion = "1.1", Author = "Petsox";
+        public const string AppVersion = "1.2", Author = "Petsox";
         const int Col0 = 0, ColRef = 1, ColName = 2, ColIcon = 4, ColId = 18;
         static readonly string[] GunTypes = { "weapon_assault", "weapon_smg", "weapon_heavy", "weapon_lmg", "weapon_sniper", "weapon_shotgun", "weapon_pistol", "weapon_projectile" };
 
@@ -539,7 +591,7 @@ namespace LocalPlayLoadout
         ComboBox cbPriCamo, cbPriCamo2, cbSecCamo, cbSecCamo2, cbPriCharm, cbSecCharm;
         const int AttachmentSlots = 6;
         ComboBox[] cbAtt = new ComboBox[AttachmentSlots], cbSecAtt = new ComboBox[AttachmentSlots];
-        ComboBox cbDevWeapon, cbDevReticle;
+        ComboBox cbDevWeapon, cbDevReticle, cbDevMap;
         RadioButton rbDevPrimary, rbDevSecondary;
         Button bUnlockAll;
         ComboBox[] cbPerk = new ComboBox[9];
@@ -576,7 +628,7 @@ namespace LocalPlayLoadout
             Button bReset = new Button { Text = "Reset all slots to (keep current)", AutoSize = true };
             bReset.Click += delegate { foreach (ComboBox c in allSlots) if (c.Items.Count > 0) c.SelectedIndex = 0; chkLethalCount.Checked = chkTacticalCount.Checked = false; };
             Button bLoad = new Button { Text = "Load class from game", AutoSize = true };
-            bLoad.Click += delegate { LoadClassFromGame(); };
+            bLoad.Click += delegate { LoadClassFromGame(LoadScope.All); };
             toolTip.SetToolTip(bLoad, "Reads the selected Local Play class from the game and fills in every field.");
             Button bExport = new Button { Text = "Export class...", AutoSize = true };
             bExport.Click += delegate { ExportClass(); };
@@ -611,12 +663,14 @@ namespace LocalPlayLoadout
 
             TableLayoutPanel weapons = TwoColumns(root);
             TableLayoutPanel pg = Section(weapons, "Primary weapon");
+            AddRow(pg, "", LoadButton("Load primary from game", LoadScope.Primary));
             cbPrimary = Slot(pg, "Weapon:");
             cbPriCamo = Slot(pg, "Camo:");
             cbPriCamo2 = Slot(pg, "Grip:");
             cbPriCharm = Slot(pg, "Charm:");
             for (int i = 0; i < AttachmentSlots; i++) cbAtt[i] = Slot(pg, "Attachment " + (i + 1) + ":");
             TableLayoutPanel sg = Section(weapons, "Secondary weapon");
+            AddRow(sg, "", LoadButton("Load secondary from game", LoadScope.Secondary));
             cbSecondary = Slot(sg, "Weapon:");
             cbSecCamo = Slot(sg, "Camo:");
             cbSecCamo2 = Slot(sg, "Grip:");
@@ -657,6 +711,15 @@ namespace LocalPlayLoadout
             AddRow(dg, "Apply to weapon slot:", devTarget);
             cbDevWeapon = Slot(dg, "Hidden weapon:");
             cbDevReticle = Slot(dg, "Test reticle:");
+            cbDevMap = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
+            cbDevMap.Items.AddRange(HiddenMaps);
+            cbDevMap.SelectedIndex = 0;
+            Button bMap = new Button { Text = "Set as lobby map", AutoSize = true };
+            bMap.Click += delegate { SetHiddenMap(); };
+            toolTip.SetToolTip(bMap, "Host only: pick any normal map in the Local Play lobby first, then press this and start the match.\nThe lobby menu keeps showing the old map - that's expected.");
+            FlowLayoutPanel mapRow = new FlowLayoutPanel { AutoSize = true };
+            mapRow.Controls.AddRange(new Control[] { cbDevMap, bMap });
+            AddRow(dg, "Hidden map:", mapRow);
             Button bDevApply = new Button { Text = "Apply dev items to class", AutoSize = true };
             bDevApply.Click += delegate { ApplyDev(); };
             AddRow(dg, "", bDevApply);
@@ -1003,6 +1066,23 @@ namespace LocalPlayLoadout
             Fill(cbDevReticle, i => i.Type == "site_reticle");
         }
 
+        // Maps the Local Play map list hides (dev/test maps and the scorestreak training map) that are in the game's
+        // string pool, so the lobby can be pointed at them.
+        static readonly object[] HiddenMaps = { "mp_house", "mp_sandbox_01", "mp_scorestreak_training" };
+
+        void SetHiddenMap()
+        {
+            if (!EnsureConnected()) return;
+            string map = cbDevMap.SelectedItem as string;
+            Cursor = Cursors.WaitCursor;
+            string err = game.SetLobbyMap(map);
+            Cursor = Cursors.Default;
+            if (err != null) { Log("Hidden map FAILED: " + err); return; }
+            string e2;
+            game.SendCommand("xupdatepartystate", out e2);
+            Log("Lobby map set to " + map + ". The lobby menu still shows the old map - just start the match (host only).");
+        }
+
         void ApplyDev()
         {
             if (!EnsureConnected()) return;
@@ -1144,6 +1224,8 @@ namespace LocalPlayLoadout
         {
             string err;
             if (!game.SendCommand("set 709 1", out err)) return "could not send 'set 709 1': " + err;
+            // dvar 5887 shows Carentan (winter) in the Local Play / private match map list
+            game.SendCommand("set 5887 1", out err);
 
             int rows; long cells;
             if (!game.FindStringTable("mp/unlocktable.csv", UnlockCols, out rows, out cells)) return "unlock table not found - wait for the main menu and press Connect again";
@@ -1492,7 +1574,19 @@ namespace LocalPlayLoadout
             }
         }
 
-        void LoadClassFromGame()
+        enum LoadScope { All, Primary, Secondary }
+
+        Button LoadButton(string text, LoadScope scope)
+        {
+            Button b = new Button { Text = text, AutoSize = true, Margin = new Padding(3, 3, 3, 6) };
+            b.Click += delegate { LoadClassFromGame(scope); };
+            toolTip.SetToolTip(b, "Reads only this weapon (with its camo, grip, charm and attachments) of the selected class from the game.");
+            return b;
+        }
+
+        // Reads the selected Local Play class from the game. Scope Primary/Secondary fills only that weapon's column
+        // and leaves every other field as it is.
+        void LoadClassFromGame(LoadScope scope)
         {
             if (!EnsureConnected()) return;
             if (cbTarget.SelectedIndex != 0) Log("Note: loading reads the Local Play classes.");
@@ -1514,32 +1608,40 @@ namespace LocalPlayLoadout
 
             int cls = cbClass.SelectedIndex, cb = ClassBit(cls);
             Func<int, uint> dw = bit => BitConverter.ToUInt32(data, bit / 8);
-            int[] wsBit = { cb + WeaponSetupBit, cb + WeaponSetupBit + WeaponSetupBits };
+            var weaponsToLoad = new List<int>();
+            if (scope != LoadScope.Secondary) weaponsToLoad.Add(0);
+            if (scope != LoadScope.Primary) weaponsToLoad.Add(1);
 
             // weapons first (they decide which camos/grips/charms are listed); show variants if a variant is equipped
-            uint prim = dw(wsBit[0] + 384), sec = dw(wsBit[1] + 384);
-            if (!chkVariants.Checked && items.Any(i => (i.Id == prim || i.Id == sec) && i.Variant >= 0 && i.Type.StartsWith("weapon_") && !IsCamo(i)))
-                chkVariants.Checked = true;
-            SelectById(cbPrimary, prim);
-            SelectById(cbSecondary, sec);
-            SelectById(cbPriCamo, dw(wsBit[0]));
-            SelectById(cbPriCamo2, dw(wsBit[0] + 32));
-            SelectById(cbPriCharm, dw(wsBit[0] + 64));
-            for (int i = 0; i < AttachmentSlots; i++) SelectById(cbAtt[i], dw(wsBit[0] + 192 + 32 * i));
-            SelectById(cbSecCamo, dw(wsBit[1]));
-            SelectById(cbSecCamo2, dw(wsBit[1] + 32));
-            SelectById(cbSecCharm, dw(wsBit[1] + 64));
-            for (int i = 0; i < AttachmentSlots; i++) SelectById(cbSecAtt[i], dw(wsBit[1] + 192 + 32 * i));
-            SelectById(cbLethal, dw(cb + EquipBit));
-            SelectById(cbTactical, dw(cb + EquipBit + 64));
-            numLethal.Value = Math.Min(numLethal.Maximum, dw(cb + EquipBit + 32));
-            numTactical.Value = Math.Min(numTactical.Maximum, dw(cb + EquipBit + 96));
-            chkLethalCount.Checked = chkTacticalCount.Checked = false;
-            for (int p = 0; p < 9; p++) SelectById(cbPerk[p], dw(cb + PerkBit + 32 * p));
-
-            uint reticle0 = dw(wsBit[0] + 128), reticle1 = dw(wsBit[1] + 128);
-            Log(string.Format("Loaded {0} from the game{1}.", cbClass.Items[cls],
-                (reticle0 != 0 || reticle1 != 0) ? string.Format(" (reticles: primary 0x{0:X}, secondary 0x{1:X})", reticle0, reticle1) : ""));
+            foreach (int w in weaponsToLoad)
+            {
+                uint wid = dw(cb + WeaponSetupBit + w * WeaponSetupBits + 384);
+                if (!chkVariants.Checked && items.Any(i => i.Id == wid && i.Variant >= 0 && i.Type.StartsWith("weapon_") && !IsCamo(i)))
+                    chkVariants.Checked = true;
+            }
+            string reticles = "";
+            foreach (int w in weaponsToLoad)
+            {
+                int ws = cb + WeaponSetupBit + w * WeaponSetupBits;
+                SelectById(w == 0 ? cbPrimary : cbSecondary, dw(ws + 384));
+                SelectById(w == 0 ? cbPriCamo : cbSecCamo, dw(ws));
+                SelectById(w == 0 ? cbPriCamo2 : cbSecCamo2, dw(ws + 32));
+                SelectById(w == 0 ? cbPriCharm : cbSecCharm, dw(ws + 64));
+                ComboBox[] atts = w == 0 ? cbAtt : cbSecAtt;
+                for (int i = 0; i < AttachmentSlots; i++) SelectById(atts[i], dw(ws + 192 + 32 * i));
+                if (dw(ws + 128) != 0) reticles += string.Format(" {0} reticle 0x{1:X}.", w == 0 ? "Primary" : "Secondary", dw(ws + 128));
+            }
+            if (scope == LoadScope.All)
+            {
+                SelectById(cbLethal, dw(cb + EquipBit));
+                SelectById(cbTactical, dw(cb + EquipBit + 64));
+                numLethal.Value = Math.Min(numLethal.Maximum, dw(cb + EquipBit + 32));
+                numTactical.Value = Math.Min(numTactical.Maximum, dw(cb + EquipBit + 96));
+                chkLethalCount.Checked = chkTacticalCount.Checked = false;
+                for (int p = 0; p < 9; p++) SelectById(cbPerk[p], dw(cb + PerkBit + 32 * p));
+            }
+            string what = scope == LoadScope.All ? "" : (scope == LoadScope.Primary ? "primary weapon of " : "secondary weapon of ");
+            Log(string.Format("Loaded {0}{1} from the game.{2}", what, cbClass.Items[cls], reticles));
         }
 
         // Selects the item with this ID; 0 = "(empty / none)". Items not offered in this slot are added so the
