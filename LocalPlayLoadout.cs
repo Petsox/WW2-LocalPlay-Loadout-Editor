@@ -21,8 +21,8 @@ namespace LocalPlayLoadout
     static class Native
     {
         public const uint PROCESS_VM_READ = 0x10, PROCESS_VM_WRITE = 0x20, PROCESS_VM_OPERATION = 0x8, PROCESS_QUERY_INFORMATION = 0x400;
-        public const uint MEM_COMMIT = 0x1000;
-        public const uint PAGE_NOACCESS = 0x01, PAGE_GUARD = 0x100;
+        public const uint MEM_COMMIT = 0x1000, MEM_PRIVATE = 0x20000;
+        public const uint PAGE_NOACCESS = 0x01, PAGE_READWRITE = 0x04, PAGE_GUARD = 0x100;
 
         [StructLayout(LayoutKind.Sequential)]
         public struct MEMORY_BASIC_INFORMATION
@@ -140,7 +140,7 @@ namespace LocalPlayLoadout
         public delegate bool ChunkVisitor(byte[] buf, int len, long baseAddr);
 
         // Walks readable committed memory in [start,end) in chunks, overlapping chunks by `overlap` bytes.
-        public void ScanMemory(long start, long end, int overlap, ChunkVisitor visit)
+        public void ScanMemory(long start, long end, int overlap, ChunkVisitor visit, bool privateReadWriteOnly = false)
         {
             const int chunk = 4 * 1024 * 1024;
             byte[] buf = new byte[chunk + overlap];
@@ -152,6 +152,7 @@ namespace LocalPlayLoadout
                 long rBase = (long)mbi.BaseAddress, rEnd = rBase + (long)mbi.RegionSize;
                 if (rEnd <= addr) break;
                 bool readable = mbi.State == Native.MEM_COMMIT && (mbi.Protect & Native.PAGE_GUARD) == 0 && (mbi.Protect & 0xFF) != Native.PAGE_NOACCESS && mbi.Protect != 0;
+                if (privateReadWriteOnly) readable &= mbi.Type == Native.MEM_PRIVATE && mbi.Protect == Native.PAGE_READWRITE;
                 if (readable)
                 {
                     long s = Math.Max(addr, rBase), e = Math.Min(end, rEnd);
@@ -475,6 +476,149 @@ namespace LocalPlayLoadout
             return found;
         }
 
+        // The Mode menu (ui/s2/mp_game_setup_menu_uc.lua) lists the groups { Cac.GameModes.Group.Standard,
+        // Cac.GameModes.Group.Esports }. Cac.GameModes.Data also has a "Party" group (gun, prop, spy, dogfight,
+        // dogfight_ffa) that the menu never shows. Each menu-building function keeps its constants as 16-byte Lua values
+        // {TString*, tag}, with the field names in the order "Group", "Standard", "Esports", "ipairs". Pointing that
+        // "Esports" constant at the game's own "Party" string makes the menu list Party Modes in place of Esports Modes;
+        // picking a mode then goes through the game's own SetPartyGameType, so the lobby and other players stay in sync.
+        // Havok Script strings: TString* p has the u64 length at p+8, a u32 hash at p+0x10 and the text at p+0x14.
+        // The menu scripts are reloaded after every match, so the patch is re-applied by MainForm.PartyModesTick.
+        const int LuaStringText = 0x14;
+        static readonly string[] PartyMenuNames = { "Group", "Standard", "Esports", "Party", "ipairs" };
+
+        public class PartyMenuPatch
+        {
+            public long Group, Standard, Esports, Party, Ipairs;
+            public List<long> Slots = new List<long>();
+        }
+
+        // Finds the interned Lua string objects with the given texts. Lua objects are 8-byte aligned and live in the
+        // script heap (private read/write memory), so only the aligned length field is tested. Stops once every name is found.
+        Dictionary<string, List<long>> FindLuaStrings(string[] names)
+        {
+            Dictionary<string, List<long>> found = names.ToDictionary(n => n, n => new List<long>());
+            byte[][] pats = names.Select(n => Encoding.ASCII.GetBytes(n + "\0")).ToArray();
+            int maxLen = names.Max(n => n.Length);
+            ScanMemory(0x10000, 0x7FFFFFFEFFFF, 64, delegate(byte[] buf, int len, long baseAddr)
+            {
+                int skew = (int)((8 - ((baseAddr + 8) & 7)) & 7);   // obj+8 (the length) is 8-byte aligned
+                for (int i = skew; i + 12 + maxLen + 1 <= len; i += 8)
+                {
+                    long n = BitConverter.ToInt64(buf, i);
+                    if (n < 1 || n > maxLen) continue;
+                    for (int k = 0; k < pats.Length; k++)
+                    {
+                        byte[] p = pats[k];
+                        if (p.Length - 1 != n) continue;
+                        int j = 0;
+                        while (j < p.Length && buf[i + 12 + j] == p[j]) j++;
+                        if (j < p.Length) continue;
+                        long obj = baseAddr + i - 8;
+                        if (!found[names[k]].Contains(obj)) found[names[k]].Add(obj);
+                    }
+                }
+                return found.Values.Any(l => l.Count == 0);
+            }, true);
+            return found;
+        }
+
+        // The committed region around `addr` (the script heap is one large allocation).
+        bool RegionAround(long addr, out long start, out long end)
+        {
+            Native.MEMORY_BASIC_INFORMATION mbi;
+            start = end = 0;
+            if (Native.VirtualQueryEx(handle, new IntPtr(addr), out mbi, new IntPtr(Marshal.SizeOf(typeof(Native.MEMORY_BASIC_INFORMATION)))) == IntPtr.Zero) return false;
+            start = (long)mbi.BaseAddress;
+            end = start + (long)mbi.RegionSize;
+            return true;
+        }
+
+        bool IsLuaString(long obj, string text)
+        {
+            byte[] b = Read(obj + 8, LuaStringText - 8 + text.Length + 1);
+            return b != null && BitConverter.ToInt64(b, 0) == text.Length && b[b.Length - 1] == 0
+                && Encoding.ASCII.GetString(b, LuaStringText - 8, text.Length) == text;
+        }
+
+        static long Nearest(List<long> candidates, long to)
+        {
+            return candidates.OrderBy(c => Math.Abs(c - to)).First();
+        }
+
+        // Locates the Mode menu's "Esports" constants. `previous` (from an earlier search) skips the full-memory string
+        // search when its strings are still in place, e.g. after the menu scripts were reloaded.
+        public PartyMenuPatch FindPartyMenu(PartyMenuPatch previous, out string error)
+        {
+            error = null;
+            Dictionary<string, List<long>> s;
+            if (previous != null && IsLuaString(previous.Group, "Group") && IsLuaString(previous.Standard, "Standard")
+                && IsLuaString(previous.Esports, "Esports") && IsLuaString(previous.Party, "Party") && IsLuaString(previous.Ipairs, "ipairs"))
+            {
+                s = new Dictionary<string, List<long>> {
+                    { "Group", new List<long> { previous.Group } }, { "Standard", new List<long> { previous.Standard } },
+                    { "Esports", new List<long> { previous.Esports } }, { "Party", new List<long> { previous.Party } },
+                    { "ipairs", new List<long> { previous.Ipairs } } };
+            }
+            else s = FindLuaStrings(PartyMenuNames);
+            foreach (string n in PartyMenuNames)
+                if (s[n].Count == 0) { error = "menu string \"" + n + "\" not found - wait for the main menu"; return null; }
+
+            HashSet<long> groups = new HashSet<long>(s["Group"]), standards = new HashSet<long>(s["Standard"]), ipairs = new HashSet<long>(s["ipairs"]);
+            HashSet<long> values = new HashSet<long>(s["Esports"].Concat(s["Party"]));
+            PartyMenuPatch p = new PartyMenuPatch();
+            // The function constants sit in the same script heap as the strings; search there first, then around it.
+            long heapStart, heapEnd, lo = s["Group"].Min(), hi = s["Group"].Max() + 8;
+            if (RegionAround(s["Group"][0], out heapStart, out heapEnd)) { lo = heapStart; hi = heapEnd; }
+            ScanForPartyMenuSlots(lo, hi, groups, standards, values, ipairs, p);
+            if (p.Slots.Count == 0)
+            {
+                List<long> all = s.Values.SelectMany(l => l).ToList();
+                ScanForPartyMenuSlots(Math.Max(0x10000, all.Min() - 0x40000000), all.Max() + 0x40000000, groups, standards, values, ipairs, p);
+            }
+            if (p.Slots.Count == 0) { error = "Mode menu not found - open Local Play first"; return null; }
+            p.Esports = Nearest(s["Esports"], p.Group);
+            p.Party = Nearest(s["Party"], p.Group);
+            return p;
+        }
+
+        void ScanForPartyMenuSlots(long start, long end, HashSet<long> groups, HashSet<long> standards, HashSet<long> values, HashSet<long> ipairs, PartyMenuPatch p)
+        {
+            ScanMemory(start, end, 0x40, delegate(byte[] buf, int len, long baseAddr)
+            {
+                int skew = (int)((8 - (baseAddr & 7)) & 7);
+                for (int i = skew + 0x20; i + 0x18 <= len; i += 8)
+                {
+                    if (!values.Contains(BitConverter.ToInt64(buf, i)) || (buf[i + 8] & 0xF) != 4) continue;
+                    long g = BitConverter.ToInt64(buf, i - 0x20), st = BitConverter.ToInt64(buf, i - 0x10), ip = BitConverter.ToInt64(buf, i + 0x10);
+                    if (!groups.Contains(g) || !standards.Contains(st) || !ipairs.Contains(ip)) continue;
+                    if (!p.Slots.Contains(baseAddr + i)) p.Slots.Add(baseAddr + i);
+                    p.Group = g; p.Standard = st; p.Ipairs = ip;
+                }
+                return true;
+            });
+        }
+
+        // Shows (or hides again) Party Modes. Returns how many constants were changed, or -1 when a slot no longer holds
+        // the menu's constants (the scripts were reloaded somewhere else) and FindPartyMenu has to run again.
+        public int ApplyPartyMenu(PartyMenuPatch p, bool show)
+        {
+            int changed = 0;
+            foreach (long slot in p.Slots)
+            {
+                byte[] b = Read(slot - 0x20, 0x38);
+                if (b == null) return -1;
+                long cur = BitConverter.ToInt64(b, 0x20);
+                if (BitConverter.ToInt64(b, 0) != p.Group || BitConverter.ToInt64(b, 0x10) != p.Standard
+                    || BitConverter.ToInt64(b, 0x30) != p.Ipairs || (cur != p.Esports && cur != p.Party)) return -1;
+                long want = show ? p.Party : p.Esports;
+                if (cur == want) continue;
+                if (!Write(slot, BitConverter.GetBytes(want))) return -1;
+                changed++;
+            }
+            return changed;
+        }
+
         public byte[] ReadPrivateLoadouts(HashSet<uint> knownIds, int[] checkOffsets, out string error)
         {
             error = null;
@@ -553,7 +697,7 @@ namespace LocalPlayLoadout
 
     class MainForm : Form
     {
-        public const string AppVersion = "1.2", Author = "Petsox";
+        public const string AppVersion = "1.3", Author = "Petsox";
         const int Col0 = 0, ColRef = 1, ColName = 2, ColIcon = 4, ColId = 18;
         static readonly string[] GunTypes = { "weapon_assault", "weapon_smg", "weapon_heavy", "weapon_lmg", "weapon_sniper", "weapon_shotgun", "weapon_pistol", "weapon_projectile" };
 
@@ -594,6 +738,7 @@ namespace LocalPlayLoadout
         ComboBox cbDevWeapon, cbDevReticle, cbDevMap;
         RadioButton rbDevPrimary, rbDevSecondary;
         Button bUnlockAll;
+        CheckBox chkPartyModes;
         ComboBox[] cbPerk = new ComboBox[9];
         List<ComboBox> allSlots = new List<ComboBox>();
         ToolTip toolTip = new ToolTip();
@@ -619,8 +764,11 @@ namespace LocalPlayLoadout
             bUnlockAll = new Button { Text = "Unlock everything in game menus", AutoSize = true };
             bUnlockAll.Click += delegate { UnlockAllClicked(); };
             toolTip.SetToolTip(bUnlockAll, "Unlocks every weapon, melee weapon, camo (incl. Challenges camos), charm and reticle in the game's own Local Play menus.\nMemory only: undone by restarting the game; re-applied automatically while this tool stays open.");
+            chkPartyModes = new CheckBox { Text = "Party modes (Prop Hunt) in Local Play", AutoSize = true, Padding = new Padding(8, 4, 0, 0) };
+            chkPartyModes.CheckedChanged += delegate { PartyModesChanged(); };
+            toolTip.SetToolTip(chkPartyModes, "Shows the game's hidden \"Party Modes\" group (Prop Hunt, Gun Game, Spy, Dogfight, Dogfight FFA)\nin Game Setup -> Mode, in place of \"Esports Modes\". Only the host needs this.\nMemory only; re-applied automatically after every match while this tool stays open. Untick to get Esports Modes back.");
             Label lblAuthor = new Label { Text = "made by " + Author, AutoSize = true, Padding = new Padding(18, 7, 0, 0), ForeColor = Color.Gray };
-            top.Controls.AddRange(new Control[] { bConnect, bDump, bUnlockAll, lblStatus, lblAuthor });
+            top.Controls.AddRange(new Control[] { bConnect, bDump, bUnlockAll, chkPartyModes, lblStatus, lblAuthor });
             root.Controls.Add(top);
             FlowLayoutPanel actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
             Button bApply = new Button { Text = "Apply to class", AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
@@ -749,6 +897,88 @@ namespace LocalPlayLoadout
                 auto.Start();
             };
             auto.Start();
+
+            System.Windows.Forms.Timer party = new System.Windows.Forms.Timer { Interval = 1500 };
+            party.Tick += delegate
+            {
+                try { PartyModesTick(); } catch (Exception ex) { Log("Party modes: " + ex.Message); }
+            };
+            party.Start();
+        }
+
+        // Party modes in the Local Play Mode menu (see Game.FindPartyMenu). The menu scripts are reloaded after every
+        // match, so while the box is ticked the patch is checked every 1.5 s and re-applied; when the menu has moved,
+        // a background search runs again (backing off up to 2 minutes while it can't be found, e.g. during a match).
+        Game.PartyMenuPatch partyMenu;
+        int partyMenuPid, partyScanDelay = 10;
+        bool partyScanBusy, partyMenuShown, partyFailLogged;
+        DateTime partyNextScan = DateTime.MinValue;
+
+        void PartyModesChanged()
+        {
+            if (chkPartyModes.Checked)
+            {
+                partyNextScan = DateTime.MinValue;
+                partyScanDelay = 10;
+                partyFailLogged = false;
+                if (!EnsureConnected()) { Log("Party modes: will be applied once the game is running."); return; }
+                Log("Party modes: looking for the Mode menu in the game...");
+                PartyModesTick();
+            }
+            else if (partyMenu != null && game != null && !game.HasExited && partyMenuPid == game.Proc.Id && !partyScanBusy)
+            {
+                if (game.ApplyPartyMenu(partyMenu, false) >= 0) Log("Party modes hidden again (Esports Modes restored). Re-open Game Setup -> Mode.");
+                partyMenuShown = false;
+            }
+        }
+
+        void PartyModesTick()
+        {
+            if (!chkPartyModes.Checked || partyScanBusy || game == null || game.HasExited) return;
+            if (partyMenu != null && partyMenuPid == game.Proc.Id)
+            {
+                int n = game.ApplyPartyMenu(partyMenu, true);
+                if (n >= 0)
+                {
+                    if (n > 0)
+                    {
+                        Log(partyMenuShown ? "Party modes re-applied (the game reloaded its menus)."
+                            : "Party modes enabled: Game Setup -> Mode now lists \"Party Modes\" (Prop Hunt, Gun Game, ...) in place of Esports Modes. Re-open the menu if it is open.");
+                        partyMenuShown = true;
+                    }
+                    return;
+                }
+            }
+            if (DateTime.Now < partyNextScan) return;
+            partyNextScan = DateTime.Now.AddSeconds(partyScanDelay);
+            partyScanBusy = true;
+            Game g = game;
+            Game.PartyMenuPatch previous = partyMenuPid == g.Proc.Id ? partyMenu : null;
+            Thread t = new Thread(delegate()
+            {
+                string err;
+                Game.PartyMenuPatch p;
+                try { p = g.FindPartyMenu(previous, out err); } catch (Exception ex) { p = null; err = ex.Message; }
+                BeginInvoke((Action)delegate
+                {
+                    partyScanBusy = false;
+                    if (g != game) return;
+                    if (p == null)
+                    {
+                        partyScanDelay = Math.Min(partyScanDelay * 2, 120);
+                        if (!partyFailLogged) Log("Party modes: " + err + ". Retrying in the background.");
+                        partyFailLogged = true;
+                        return;
+                    }
+                    partyScanDelay = 10;
+                    partyFailLogged = false;
+                    if (partyMenuPid != g.Proc.Id) partyMenuShown = false;
+                    partyMenu = p;
+                    partyMenuPid = g.Proc.Id;
+                    PartyModesTick();
+                });
+            }) { IsBackground = true };
+            t.Start();
         }
 
         TableLayoutPanel rootPanel;
