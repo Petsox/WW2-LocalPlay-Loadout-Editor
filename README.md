@@ -42,7 +42,7 @@ writing anything.
   can be picked in the game's own *Soldier → Divisions* screen, and about 80 camos per weapon appear under
   *Camouflage → Special*. Normally Local Play shows only a handful there, because all the seasonal camo tabs
   are hidden offline. It also adds **Carentan (winter)** to the Local Play map list.
-- **Prop Hunt in Local Play:** tick *Party modes (Prop Hunt) in Local Play* and *Game Setup → Mode* lists the game's
+- **Prop Hunt in Local Play:** click *Party modes in Local Play* (under *Connect to game*; green while on) and *Game Setup → Mode* lists the game's
   hidden **Party Modes** group (Prop Hunt, Gun Game, Spy, Dogfight, Dogfight FFA) in place of Esports Modes. Only the
   host needs it; friends on the LAN join as usual.
 - **Load class from game:** reads the selected class back from the game and fills every field. The class names
@@ -65,13 +65,16 @@ Get `WW2_LocalPlay_Loadout_Editor.exe` from the [Releases](../../releases) page,
 ## Usage
 
 1. Put `WW2_LocalPlay_Loadout_Editor.exe` anywhere you like; the game folder is convenient.
-2. Start the game and wait for the main menu, then start the tool. It connects automatically, or you can press
-   **1. Connect to game**.
-3. Press **2. Load full item list from game** once. This saves `statstable_full.csv` next to the tool for later runs.
-4. Optional: press **Unlock everything in game menus** to use the game's own class editor.
+2. Start the game and wait for the main menu, then start the tool. It connects automatically (the badge at the
+   top right turns green), or you can press **Connect to game** in the sidebar.
+3. Press **Load full item list from game** in the sidebar once. This saves `statstable_full.csv` next to the tool
+   for later runs.
+4. Optional: press **Unlock everything in game menus** to use the game's own class editor, and
+   **Party modes in Local Play** to get Prop Hunt (host only).
 5. Go to **Local Play** in the game.
-6. Pick a class in the tool and press **Load class from game** to see what's in it. Change any fields, then press
-   **Apply to class**. Fields left on *(keep current)* are not touched.
+6. On the **Class editor** tab, pick a class and press **Load class from game** to see what's in it. Change any
+   fields, then press **Apply to class**. Fields left on *(keep current)* are not touched. Hidden weapons, hidden
+   maps and the raw console command are on the **Dev & hidden items** tab.
 7. Back out of the Divisions screen in the game and go in again, then check your weapon in the Firing Range.
 
 Every player needs the tool running on their own PC, because each PC keeps its own classes.
@@ -86,7 +89,7 @@ The tool doesn't change any files. Everything happens in the running game's memo
 | Writing classes | Injects `setPrivateLoadout "privateMatchCustomClasses" <class> ...` into the game's console command buffer (`cmd_textArray`, found by signature, the same method the community *WW2 Loadout Editor* used for online classes). |
 | Camos that freeze the game | Camos without the "free" flag in `mp/camotable.csv` make the game wait for the online inventory, which never answers offline. The tool sets that flag on every camo in memory. Only *generic* camo IDs work, so the tool never sends per-weapon IDs. |
 | Unlock everything | Sets dvar `709` (the developers' unlock-all switch, checked throughout the menu scripts). In `mp/unlocktable.csv` it also sets *UnlockForLANTournament* = 1 on every item, gives post-launch weapons a challenge value (Local Play only lets those be equipped if they have one), and gives mastery/tier camos a basic challenge, so the offline menu shows them under *Challenges*. Offline the camo menu only shows the tabs marked `Offline=1` in `mp/categories_camo.csv` (*Special* and *Challenges*), so loot camos from the hidden seasonal tabs get their statstable *Operation* (column 52) set to Special. |
-| Party modes | The Mode menu (`ui/s2/mp_game_setup_menu_uc.lua`) only lists the groups `Cac.GameModes.Group.Standard` and `.Esports`, although `Cac.GameModes.Data` also defines a `Party` group with `prop` (Prop Hunt) and the other party modes. The tool finds the menu functions' constants (`"Group"`, `"Standard"`, `"Esports"`, `"ipairs"`) in the Lua heap and points their `"Esports"` at the game's own `"Party"` string. Picking a mode then runs the game's `SetPartyGameType` as usual. The menu scripts reload after every match, so the tool re-applies this every 1.5 s while the box is ticked. |
+| Party modes | The Mode menu (`ui/s2/mp_game_setup_menu_uc.lua`) only lists the groups `Cac.GameModes.Group.Standard` and `.Esports`, although `Cac.GameModes.Data` also defines a `Party` group with `prop` (Prop Hunt) and the other party modes. The tool finds the menu functions' constants (`"Group"`, `"Standard"`, `"Esports"`, `"ipairs"`) in the Lua heap and points their `"Esports"` at the game's own `"Party"` string. Picking a mode then runs the game's `SetPartyGameType` as usual. The menu scripts reload after every match, so the tool re-applies this every 1.5 s while the button is on. |
 | Hidden maps | The lobby keeps its selected map as a pointer to an interned string (party data at `exe+0x8DD8DB0`, pointer at `+0x268`, as used by the game's `SetPartyMapName`). The tool points it at the pooled string of a hidden map and moves one reference count from the old string to the new one. `set 5887 1` makes the menu list Carentan (winter). |
 | Reading classes | The Local Play classes live in the encrypted "private loadouts" stats buffer. The tool reads it, recovers the per-session XOR key (only 65,536 keys are possible; the right one turns the class fields into valid item IDs), then decodes the classes using the layout from `mp/ddl/privateloadouts.ddl`. |
 
@@ -132,7 +135,7 @@ Windows (.NET Framework 4) and writes `WW2_LocalPlay_Loadout_Editor.exe` next to
 - Paintjobs are stored in online file slots, so they can't be used offline.
 - Attachment slots 5 and 6 are more than the game's own menu allows. Test them in the Firing Range first.
 - Dev & hidden items may look broken, do nothing, or freeze the game. Test in the Firing Range.
-- Party modes replace the Esports Modes group in the menu while enabled (untick to get it back). Prop Hunt is tested
+- Party modes replace the Esports Modes group in the menu while enabled (click the button again to get it back). Prop Hunt is tested
   in Local Play; Gun Game, Spy and the Dogfight modes are not, and the Dogfight maps may not load offline.
 - Hidden maps: pick any normal map in the lobby first (as host), then use *Set as lobby map* and start the match.
   The lobby keeps showing the old map's name and picture. Other hidden maps aren't offered: Excavation's internal

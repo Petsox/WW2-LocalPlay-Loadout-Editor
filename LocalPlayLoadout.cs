@@ -738,7 +738,16 @@ namespace LocalPlayLoadout
         ComboBox cbDevWeapon, cbDevReticle, cbDevMap;
         RadioButton rbDevPrimary, rbDevSecondary;
         Button bUnlockAll;
-        CheckBox chkPartyModes;
+        Button bPartyModes, bDump;
+
+        static readonly Color ColorGreen = Color.FromArgb(0, 128, 0), ColorRed = Color.FromArgb(192, 0, 0),
+            ColorOrange = Color.FromArgb(214, 100, 0), ColorBlue = Color.FromArgb(0, 90, 200);
+
+        // Button text colour; null puts the normal text colour back.
+        static void Colorize(Button b, Color? text)
+        {
+            b.ForeColor = text ?? SystemColors.ControlText;
+        }
         ComboBox[] cbPerk = new ComboBox[9];
         List<ComboBox> allSlots = new List<ComboBox>();
         ToolTip toolTip = new ToolTip();
@@ -748,77 +757,104 @@ namespace LocalPlayLoadout
             Text = "WWII Local Play Loadout Editor " + AppVersion + "  -  made by " + Author;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             Font = new Font("Segoe UI", 9f);
-            Width = 1180; Height = 940;
+            Width = 1280; Height = 1020;
+            MinimumSize = new Size(1000, 700);
             StartPosition = FormStartPosition.CenterScreen;
+            BackColor = BodyBack;
 
-            TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(8), AutoScroll = true };
-            rootPanel = root;
-            Controls.Add(root);
+            // ---- header: title and connection status ----
+            TableLayoutPanel header = new TableLayoutPanel { Dock = DockStyle.Top, Height = 62, ColumnCount = 2, BackColor = HeaderBack, Padding = new Padding(16, 8, 16, 8) };
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            FlowLayoutPanel titles = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
+            titles.Controls.Add(new Label { Text = "WWII Local Play Loadout Editor", AutoSize = true, ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 14f), Margin = Padding.Empty });
+            titles.Controls.Add(new Label { Text = "v" + AppVersion + "  ·  made by " + Author + "  ·  Offline / Local Play only", AutoSize = true, ForeColor = HeaderSubText, Margin = new Padding(2, 0, 0, 0) });
+            lblStatus = new Label { AutoSize = true, Anchor = AnchorStyles.Right, Padding = new Padding(12, 6, 12, 6), Font = new Font("Segoe UI Semibold", 9.5f) };
+            SetStatus("Not connected", false);
+            header.Controls.Add(titles);
+            header.Controls.Add(lblStatus);
 
-            FlowLayoutPanel top = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
-            Button bConnect = new Button { Text = "1. Connect to game", AutoSize = true };
+            // ---- sidebar: game-wide actions ----
+            FlowLayoutPanel side = new FlowLayoutPanel { Dock = DockStyle.Left, Width = 252, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = SideBack, Padding = new Padding(12, 6, 12, 10) };
+            side.Controls.Add(Caption("GAME"));
+            Button bConnect = SideButton("Connect to game");
             bConnect.Click += delegate { Connect(); };
-            Button bDump = new Button { Text = "2. Load full item list from game", AutoSize = true };
-            bDump.Click += delegate { DumpTable(); };
-            lblStatus = new Label { Text = "Not connected", AutoSize = true, Padding = new Padding(6, 7, 0, 0), ForeColor = Color.DarkRed };
-            bUnlockAll = new Button { Text = "Unlock everything in game menus", AutoSize = true };
+            toolTip.SetToolTip(bConnect, "Connects to the running game. Happens automatically every few seconds as well.");
+            bPartyModes = SideButton("Party modes in Local Play");
+            bPartyModes.Click += delegate { partyModesWanted = !partyModesWanted; PartyModesChanged(); };
+            toolTip.SetToolTip(bPartyModes, "Shows the game's hidden \"Party Modes\" group (Prop Hunt, Gun Game, Spy, Dogfight, Dogfight FFA)\nin Game Setup -> Mode, in place of \"Esports Modes\". Only the host needs this.\nMemory only; re-applied automatically after every match while this tool stays open. Click again to get Esports Modes back.");
+            bUnlockAll = SideButton("Unlock everything in game menus");
             bUnlockAll.Click += delegate { UnlockAllClicked(); };
             toolTip.SetToolTip(bUnlockAll, "Unlocks every weapon, melee weapon, camo (incl. Challenges camos), charm and reticle in the game's own Local Play menus.\nMemory only: undone by restarting the game; re-applied automatically while this tool stays open.");
-            chkPartyModes = new CheckBox { Text = "Party modes (Prop Hunt) in Local Play", AutoSize = true, Padding = new Padding(8, 4, 0, 0) };
-            chkPartyModes.CheckedChanged += delegate { PartyModesChanged(); };
-            toolTip.SetToolTip(chkPartyModes, "Shows the game's hidden \"Party Modes\" group (Prop Hunt, Gun Game, Spy, Dogfight, Dogfight FFA)\nin Game Setup -> Mode, in place of \"Esports Modes\". Only the host needs this.\nMemory only; re-applied automatically after every match while this tool stays open. Untick to get Esports Modes back.");
-            Label lblAuthor = new Label { Text = "made by " + Author, AutoSize = true, Padding = new Padding(18, 7, 0, 0), ForeColor = Color.Gray };
-            top.Controls.AddRange(new Control[] { bConnect, bDump, bUnlockAll, chkPartyModes, lblStatus, lblAuthor });
-            root.Controls.Add(top);
-            FlowLayoutPanel actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
+            side.Controls.AddRange(new Control[] { bConnect, bPartyModes, bUnlockAll });
+            side.Controls.Add(Hint("Party modes: Prop Hunt and more under Game Setup → Mode (host only). Green = on."));
+            side.Controls.Add(Caption("ITEM LIST"));
+            bDump = SideButton("Load full item list from game");
+            bDump.Click += delegate { DumpTable(); };
+            toolTip.SetToolTip(bDump, "Reads every weapon, camo and attachment from the game. Needed once; saved next to the tool.");
+            side.Controls.Add(bDump);
+            lblItems = Hint("");
+            side.Controls.Add(lblItems);
+
+            // ---- tab 1: class editor ----
+            TabControl tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(16, 5) };
+            TabPage tabClass = new TabPage("Class editor") { UseVisualStyleBackColor = false, BackColor = BodyBack };
+            TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(6), AutoScroll = true, BackColor = BodyBack };
+            rootPanel = root;
+            tabClass.Controls.Add(root);
+
+            cbClass = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
+            for (int i = 1; i <= 10; i++) cbClass.Items.Add("Class " + i);
+            cbClass.SelectedIndex = 0;
+            cbTarget = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 270 };
+            cbTarget.Items.AddRange(new object[] { "Local Play / Private match", "Online ranked (original editor behaviour)" });
+            cbTarget.SelectedIndex = 0;
+            chkVariants = new CheckBox { Text = "Include weapon variants (loot versions, e.g. \"STG-44 - variant 2\")", AutoSize = true, Margin = new Padding(3, 6, 18, 0) };
+            chkVariants.CheckedChanged += delegate { FillCombos(); };
+            chkAll = new CheckBox { Text = "Show every item in every slot (no restrictions)", AutoSize = true, Margin = new Padding(3, 6, 3, 0) };
+            chkAll.CheckedChanged += delegate { FillCombos(); };
+
             Button bApply = new Button { Text = "Apply to class", AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
             bApply.Click += delegate { Apply(); };
-            Button bReset = new Button { Text = "Reset all slots to (keep current)", AutoSize = true };
-            bReset.Click += delegate { foreach (ComboBox c in allSlots) if (c.Items.Count > 0) c.SelectedIndex = 0; chkLethalCount.Checked = chkTacticalCount.Checked = false; };
+            toolTip.SetToolTip(bApply, "Writes the fields below into the selected class. Fields on (keep current) are not touched.");
             Button bLoad = new Button { Text = "Load class from game", AutoSize = true };
             bLoad.Click += delegate { LoadClassFromGame(LoadScope.All); };
             toolTip.SetToolTip(bLoad, "Reads the selected Local Play class from the game and fills in every field.");
+            Button bReset = new Button { Text = "Reset all slots to (keep current)", AutoSize = true };
+            bReset.Click += delegate { foreach (ComboBox c in allSlots) if (c.Items.Count > 0) c.SelectedIndex = 0; chkLethalCount.Checked = chkTacticalCount.Checked = false; };
             Button bExport = new Button { Text = "Export class...", AutoSize = true };
             bExport.Click += delegate { ExportClass(); };
             Button bImport = new Button { Text = "Import class...", AutoSize = true };
             bImport.Click += delegate { ImportClass(); };
             toolTip.SetToolTip(bExport, "Saves the fields below to a .json file you can share.");
             toolTip.SetToolTip(bImport, "Fills the fields below from a .json file. Click \"Apply to class\" afterwards to put it in the game.");
+            foreach (Button b in new[] { bApply, bLoad, bReset, bExport, bImport }) StyleButton(b);
+            bApply.BackColor = HeaderBack; bApply.ForeColor = Color.White;
+            bApply.FlatAppearance.BorderColor = HeaderBack; bApply.FlatAppearance.MouseOverBackColor = Color.FromArgb(60, 66, 76);
+            Colorize(bLoad, ColorGreen);
+            Colorize(bReset, ColorRed);
+            Colorize(bExport, ColorOrange);
+            Colorize(bImport, ColorBlue);
+
+            TableLayoutPanel classCard = Card(root, "Class", null, 100);
+            FlowLayoutPanel pick = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+            pick.Controls.AddRange(new Control[] { cbClass, new Label { Text = "Apply to:", AutoSize = true, Margin = new Padding(18, 7, 3, 0) }, cbTarget });
+            AddRow(classCard, "Custom class:", pick);
+            FlowLayoutPanel actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 2) };
             actions.Controls.AddRange(new Control[] { bApply, bLoad, bReset, bExport, bImport });
-            root.Controls.Add(actions);
-
-            TableLayoutPanel grid = new TableLayoutPanel { ColumnCount = 2, Dock = DockStyle.Fill, AutoSize = true };
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            root.Controls.Add(grid);
-
-            cbTarget = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
-            cbTarget.Items.AddRange(new object[] { "Local Play / Private match", "Online ranked (original editor behaviour)" });
-            cbTarget.SelectedIndex = 0;
-            AddRow(grid, "Apply to:", cbTarget);
-
-            cbClass = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
-            for (int i = 1; i <= 10; i++) cbClass.Items.Add("Class " + i);
-            cbClass.SelectedIndex = 0;
-            AddRow(grid, "Custom class:", cbClass);
-
-            chkVariants = new CheckBox { Text = "Include weapon variants (loot versions, e.g. \"STG-44 - variant 2\")", AutoSize = true };
-            chkVariants.CheckedChanged += delegate { FillCombos(); };
-            AddRow(grid, "", chkVariants);
-            chkAll = new CheckBox { Text = "Show every item in every slot (no restrictions)", AutoSize = true };
-            chkAll.CheckedChanged += delegate { FillCombos(); };
-            AddRow(grid, "", chkAll);
+            AddRow(classCard, "", actions);
+            FlowLayoutPanel options = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+            options.Controls.AddRange(new Control[] { chkVariants, chkAll });
+            AddRow(classCard, "Options:", options);
 
             TableLayoutPanel weapons = TwoColumns(root);
-            TableLayoutPanel pg = Section(weapons, "Primary weapon");
-            AddRow(pg, "", LoadButton("Load primary from game", LoadScope.Primary));
+            TableLayoutPanel pg = Card(weapons, "Primary weapon", LoadButton("Load primary from game", LoadScope.Primary), 100);
             cbPrimary = Slot(pg, "Weapon:");
             cbPriCamo = Slot(pg, "Camo:");
             cbPriCamo2 = Slot(pg, "Grip:");
             cbPriCharm = Slot(pg, "Charm:");
             for (int i = 0; i < AttachmentSlots; i++) cbAtt[i] = Slot(pg, "Attachment " + (i + 1) + ":");
-            TableLayoutPanel sg = Section(weapons, "Secondary weapon");
-            AddRow(sg, "", LoadButton("Load secondary from game", LoadScope.Secondary));
+            TableLayoutPanel sg = Card(weapons, "Secondary weapon", LoadButton("Load secondary from game", LoadScope.Secondary), 100);
             cbSecondary = Slot(sg, "Weapon:");
             cbSecCamo = Slot(sg, "Camo:");
             cbSecCamo2 = Slot(sg, "Grip:");
@@ -826,7 +862,7 @@ namespace LocalPlayLoadout
             for (int i = 0; i < AttachmentSlots; i++) cbSecAtt[i] = Slot(sg, "Attachment " + (i + 1) + ":");
 
             TableLayoutPanel lower = TwoColumns(root);
-            TableLayoutPanel eg = Section(lower, "Equipment");
+            TableLayoutPanel eg = Card(lower, "Equipment", null, 100);
             cbLethal = Slot(eg, "Lethal:");
             cbTactical = Slot(eg, "Tactical:");
             numLethal = new NumericUpDown { Minimum = 0, Maximum = 5, Width = 60 };
@@ -839,19 +875,20 @@ namespace LocalPlayLoadout
             extraTactical.Controls.AddRange(new Control[] { chkTacticalCount, numTactical });
             AddRow(eg, "Extra lethals:", extraLethal);
             AddRow(eg, "Extra tacticals:", extraTactical);
-            TableLayoutPanel kg = Section(lower, "Perks");
+            TableLayoutPanel kg = Card(lower, "Perks", null, 100);
             for (int i = 0; i < 9; i++) cbPerk[i] = Slot(kg, "Perk slot " + (i + 1) + ":");
 
             cbPrimary.SelectedIndexChanged += delegate { FillCamos(cbPrimary, cbPriCamo, cbPriCamo2); };
             cbSecondary.SelectedIndexChanged += delegate { FillCamos(cbSecondary, cbSecCamo, cbSecCamo2); };
+            root.Controls.Add(new Panel { Height = 0, Margin = Padding.Empty });   // takes the spare height so the last cards don't stretch
+            tabs.TabPages.Add(tabClass);
 
-            lblItems = new Label { AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(1100, 0), Padding = new Padding(4, 2, 0, 4) };
-            root.Controls.Add(lblItems);
-
-            GroupBox devBox = new GroupBox { Text = "Dev && hidden items  (experimental: may look broken, do nothing, or freeze the game - test in the Firing Range)", Dock = DockStyle.Fill, AutoSize = true, ForeColor = Color.DarkRed };
-            TableLayoutPanel dg = new TableLayoutPanel { ColumnCount = 2, Dock = DockStyle.Fill, AutoSize = true, ForeColor = SystemColors.ControlText };
-            dg.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 162));
-            dg.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            // ---- tab 2: dev & hidden items, raw command ----
+            TabPage tabDev = new TabPage("Dev & hidden items") { UseVisualStyleBackColor = false, BackColor = BodyBack };
+            TableLayoutPanel devRoot = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(6), AutoScroll = true, BackColor = BodyBack };
+            tabDev.Controls.Add(devRoot);
+            devRoot.Controls.Add(new Label { Text = "Experimental: these items may look broken, do nothing, or freeze the game. Test them in the Firing Range first.", AutoSize = true, ForeColor = ColorRed, Margin = new Padding(6, 6, 6, 6) });
+            TableLayoutPanel dg = Card(devRoot, "Hidden weapons, reticle and maps", null, 160);
             rbDevPrimary = new RadioButton { Text = "Primary", AutoSize = true, Checked = true };
             rbDevSecondary = new RadioButton { Text = "Secondary", AutoSize = true };
             FlowLayoutPanel devTarget = new FlowLayoutPanel { AutoSize = true };
@@ -859,31 +896,45 @@ namespace LocalPlayLoadout
             AddRow(dg, "Apply to weapon slot:", devTarget);
             cbDevWeapon = Slot(dg, "Hidden weapon:");
             cbDevReticle = Slot(dg, "Test reticle:");
+            Button bDevApply = new Button { Text = "Apply dev items to class", AutoSize = true };
+            bDevApply.Click += delegate { ApplyDev(); };
+            StyleButton(bDevApply);
+            AddRow(dg, "", bDevApply);
             cbDevMap = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
             cbDevMap.Items.AddRange(HiddenMaps);
             cbDevMap.SelectedIndex = 0;
             Button bMap = new Button { Text = "Set as lobby map", AutoSize = true };
             bMap.Click += delegate { SetHiddenMap(); };
+            StyleButton(bMap);
             toolTip.SetToolTip(bMap, "Host only: pick any normal map in the Local Play lobby first, then press this and start the match.\nThe lobby menu keeps showing the old map - that's expected.");
             FlowLayoutPanel mapRow = new FlowLayoutPanel { AutoSize = true };
             mapRow.Controls.AddRange(new Control[] { cbDevMap, bMap });
             AddRow(dg, "Hidden map:", mapRow);
-            Button bDevApply = new Button { Text = "Apply dev items to class", AutoSize = true };
-            bDevApply.Click += delegate { ApplyDev(); };
-            AddRow(dg, "", bDevApply);
-            devBox.Controls.Add(dg);
-            root.Controls.Add(devBox);
 
-
-            FlowLayoutPanel raw = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
-            txtRaw = new TextBox { Width = 600 };
+            TableLayoutPanel rg = Card(devRoot, "Console command", null, 160);
+            txtRaw = new TextBox { Width = 520 };
             Button bRaw = new Button { Text = "Send raw command", AutoSize = true };
             bRaw.Click += delegate { if (EnsureConnected() && txtRaw.Text.Trim().Length > 0) Send(txtRaw.Text.Trim()); };
+            StyleButton(bRaw);
+            FlowLayoutPanel raw = new FlowLayoutPanel { AutoSize = true };
             raw.Controls.AddRange(new Control[] { txtRaw, bRaw });
-            root.Controls.Add(raw);
+            AddRow(rg, "Command:", raw);
+            devRoot.Controls.Add(new Panel { Height = 0, Margin = Padding.Empty });
+            tabs.TabPages.Add(tabDev);
 
-            txtLog = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Height = 140, Font = new Font("Consolas", 8.5f) };
-            root.Controls.Add(txtLog);
+            // ---- log, always visible ----
+            Panel logPanel = new Panel { Dock = DockStyle.Bottom, Height = 125, Padding = new Padding(10, 0, 10, 10), BackColor = BodyBack };
+            txtLog = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Font = new Font("Consolas", 8.5f), BackColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
+            Label logCaption = Caption("LOG");
+            logCaption.Dock = DockStyle.Top;
+            logPanel.Controls.Add(txtLog);
+            logPanel.Controls.Add(logCaption);
+
+            // docking is applied from the last added control: header, then log, then sidebar, then the tabs fill the rest
+            Controls.Add(tabs);
+            Controls.Add(side);
+            Controls.Add(logPanel);
+            Controls.Add(header);
 
             Log("WWII Local Play Loadout Editor " + AppVersion + " - made by " + Author + ". Offline / Local Play only.");
             DisableWheelOnValueFields(this);
@@ -907,16 +958,17 @@ namespace LocalPlayLoadout
         }
 
         // Party modes in the Local Play Mode menu (see Game.FindPartyMenu). The menu scripts are reloaded after every
-        // match, so while the box is ticked the patch is checked every 1.5 s and re-applied; when the menu has moved,
+        // match, so while the button is on the patch is checked every 1.5 s and re-applied; when the menu has moved,
         // a background search runs again (backing off up to 2 minutes while it can't be found, e.g. during a match).
         Game.PartyMenuPatch partyMenu;
         int partyMenuPid, partyScanDelay = 10;
-        bool partyScanBusy, partyMenuShown, partyFailLogged;
+        bool partyModesWanted, partyScanBusy, partyMenuShown, partyFailLogged;
         DateTime partyNextScan = DateTime.MinValue;
 
         void PartyModesChanged()
         {
-            if (chkPartyModes.Checked)
+            Colorize(bPartyModes, partyModesWanted ? ColorGreen : (Color?)null);
+            if (partyModesWanted)
             {
                 partyNextScan = DateTime.MinValue;
                 partyScanDelay = 10;
@@ -934,7 +986,7 @@ namespace LocalPlayLoadout
 
         void PartyModesTick()
         {
-            if (!chkPartyModes.Checked || partyScanBusy || game == null || game.HasExited) return;
+            if (!partyModesWanted || partyScanBusy || game == null || game.HasExited) return;
             if (partyMenu != null && partyMenuPid == game.Proc.Id)
             {
                 int n = game.ApplyPartyMenu(partyMenu, true);
@@ -985,22 +1037,91 @@ namespace LocalPlayLoadout
 
         static TableLayoutPanel TwoColumns(TableLayoutPanel parent)
         {
-            TableLayoutPanel t = new TableLayoutPanel { ColumnCount = 2, Dock = DockStyle.Fill, AutoSize = true };
+            TableLayoutPanel t = new TableLayoutPanel { ColumnCount = 2, Dock = DockStyle.Fill, AutoSize = true, Margin = Padding.Empty };
             t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             parent.Controls.Add(t);
             return t;
         }
 
-        static TableLayoutPanel Section(TableLayoutPanel parent, string title)
+        // ---------- look ----------
+
+        static readonly Color HeaderBack = Color.FromArgb(35, 39, 46), HeaderSubText = Color.FromArgb(170, 176, 186),
+            BodyBack = Color.FromArgb(243, 244, 246), SideBack = Color.FromArgb(232, 234, 238),
+            CardBack = Color.White, CardBorder = Color.FromArgb(218, 221, 226), CaptionText = Color.FromArgb(105, 112, 122);
+
+        // A white card with a title (and optionally a button at the right of the title) around a label / field grid.
+        static TableLayoutPanel Card(TableLayoutPanel parent, string title, Control titleButton, int labelWidth)
         {
-            GroupBox g = new GroupBox { Text = title, Dock = DockStyle.Fill, AutoSize = true, Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
-            TableLayoutPanel t = new TableLayoutPanel { ColumnCount = 2, Dock = DockStyle.Fill, AutoSize = true, Font = new Font("Segoe UI", 9f) };
-            t.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
-            t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            g.Controls.Add(t);
-            parent.Controls.Add(g);
-            return t;
+            // A Panel sized like the old GroupBox (grid filling it, title docked on top); an AutoSize TableLayoutPanel
+            // here makes every dropdown change re-measure the whole page, which slowed start-up from 2 s to 12 s.
+            Panel card = new Panel { Dock = DockStyle.Fill, AutoSize = true, BackColor = CardBack, Padding = new Padding(12, 8, 12, 10), Margin = new Padding(5) };
+            card.Paint += delegate(object s, PaintEventArgs e)
+            {
+                using (Pen p = new Pen(CardBorder)) e.Graphics.DrawRectangle(p, 0, 0, card.Width - 1, card.Height - 1);
+            };
+            TableLayoutPanel grid = new TableLayoutPanel { ColumnCount = 2, Dock = DockStyle.Fill, AutoSize = true, Margin = Padding.Empty };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, labelWidth));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            Panel head = new Panel { Dock = DockStyle.Top, Height = 34 };
+            head.Controls.Add(new Label { Text = title, AutoSize = true, Location = new Point(0, 4), Font = new Font("Segoe UI Semibold", 10.5f), ForeColor = HeaderBack });
+            if (titleButton != null)
+            {
+                titleButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+                head.Controls.Add(titleButton);
+                head.Resize += delegate { titleButton.Location = new Point(head.Width - titleButton.Width, 0); };
+            }
+            card.Controls.Add(grid);
+            card.Controls.Add(head);
+            parent.Controls.Add(card);
+            return grid;
+        }
+
+        // Flat button with a thin border and a hover shade.
+        static void StyleButton(Button b)
+        {
+            b.FlatStyle = FlatStyle.Flat;
+            b.BackColor = Color.White;
+            b.UseVisualStyleBackColor = false;
+            b.FlatAppearance.BorderColor = Color.FromArgb(196, 200, 207);
+            b.FlatAppearance.BorderSize = 1;
+            b.ForeColor = SystemColors.ControlText;
+            b.FlatAppearance.MouseOverBackColor = Color.FromArgb(236, 239, 243);
+            b.FlatAppearance.MouseDownBackColor = Color.FromArgb(222, 226, 232);
+            b.Padding = new Padding(6, 2, 6, 2);
+            b.Cursor = Cursors.Hand;
+        }
+
+        // Amber "do this first" look for the item list button while no full item list is loaded.
+        void HighlightDumpButton(bool on)
+        {
+            StyleButton(bDump);
+            bDump.Padding = new Padding(10, 0, 6, 0);
+            bDump.Font = new Font(Font, on ? FontStyle.Bold : FontStyle.Regular);
+            if (!on) return;
+            bDump.BackColor = Color.FromArgb(255, 236, 179);
+            bDump.ForeColor = Color.FromArgb(150, 70, 0);
+            bDump.FlatAppearance.BorderColor = ColorOrange;
+            bDump.FlatAppearance.BorderSize = 2;
+            bDump.FlatAppearance.MouseOverBackColor = Color.FromArgb(255, 224, 140);
+        }
+
+        static Button SideButton(string text)
+        {
+            Button b = new Button { Text = text, Width = 226, Height = 36, Margin = new Padding(0, 0, 0, 6), TextAlign = ContentAlignment.MiddleLeft };
+            StyleButton(b);
+            b.Padding = new Padding(10, 0, 6, 0);
+            return b;
+        }
+
+        static Label Caption(string text)
+        {
+            return new Label { Text = text, AutoSize = true, ForeColor = CaptionText, Font = new Font("Segoe UI Semibold", 8.25f), Margin = new Padding(0, 12, 0, 6) };
+        }
+
+        static Label Hint(string text)
+        {
+            return new Label { Text = text, AutoSize = true, MaximumSize = new Size(226, 0), ForeColor = CaptionText, Margin = new Padding(0, 0, 0, 4) };
         }
 
         // The mouse wheel must not change dropdowns / number boxes by accident; it scrolls the window instead.
@@ -1106,6 +1227,7 @@ namespace LocalPlayLoadout
         {
             items.Clear();
             bool full = rows.Any(r => Cell(r, ColName).EndsWith("_mp"));
+            HighlightDumpButton(!full);
             HashSet<string> seen = new HashSet<string>();
             System.Text.RegularExpressions.Regex lootRx = new System.Text.RegularExpressions.Regex(@"^(.*)_loot(\d+)$");
             foreach (string[] r in rows)
@@ -1189,8 +1311,8 @@ namespace LocalPlayLoadout
             }
             items = items.OrderBy(i => TypeOrder(i)).ThenBy(i => i.Name).ToList();
             Dictionary<string, int> counts = items.Where(i => i.Variant < 0 || IsCamo(i)).GroupBy(i => TypeLabel(i)).ToDictionary(g => g.Key, g => g.Count());
-            lblItems.Text = "Items loaded from " + source + ": " + string.Join(", ", counts.Select(kv => kv.Key + " " + kv.Value))
-                + (full ? "" : "\nTip: click \"Load full item list from game\" to get every weapon and camo.");
+            lblItems.Text = "Loaded from " + source + ":\n" + string.Join("\n", counts.Select(kv => "  " + kv.Key + ": " + kv.Value))
+                + (full ? "" : "\n\nTip: click \"Load full item list from game\" to get every weapon and camo.");
             FillCombos();
         }
 
@@ -1615,8 +1737,9 @@ namespace LocalPlayLoadout
 
         void SetStatus(string s, bool good)
         {
-            lblStatus.Text = s;
-            lblStatus.ForeColor = good ? Color.DarkGreen : Color.DarkRed;
+            lblStatus.Text = "●  " + s;
+            lblStatus.ForeColor = Color.White;
+            lblStatus.BackColor = good ? ColorGreen : ColorRed;
         }
 
         void DumpTable()
@@ -1808,7 +1931,9 @@ namespace LocalPlayLoadout
 
         Button LoadButton(string text, LoadScope scope)
         {
-            Button b = new Button { Text = text, AutoSize = true, Margin = new Padding(3, 3, 3, 6) };
+            Button b = new Button { Text = text, AutoSize = true, Anchor = AnchorStyles.Right, Margin = new Padding(3, 0, 0, 0) };
+            StyleButton(b);
+            Colorize(b, ColorGreen);
             b.Click += delegate { LoadClassFromGame(scope); };
             toolTip.SetToolTip(b, "Reads only this weapon (with its camo, grip, charm and attachments) of the selected class from the game.");
             return b;
