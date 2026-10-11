@@ -1,4 +1,4 @@
-// WWII Local Play Loadout Editor
+// WWII Local Play Unlocker
 // Copyright (c) 2026 Petsox. Source-available, see LICENSE: contributions welcome, no redistribution of modified versions.
 // Injects setPrivateLoadout / setRankedLoadout commands into the game's command buffer
 // (same mechanism as the community WW2_Loadout_Editor) and can dump the full
@@ -754,7 +754,7 @@ namespace LocalPlayLoadout
 
         public MainForm()
         {
-            Text = "WWII Local Play Loadout Editor " + AppVersion + "  -  made by " + Author;
+            Text = "WWII Local Play Unlocker " + AppVersion + "  -  made by " + Author;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             Font = new Font("Segoe UI", 9f);
             Width = 1280; Height = 1020;
@@ -767,7 +767,7 @@ namespace LocalPlayLoadout
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             FlowLayoutPanel titles = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
-            titles.Controls.Add(new Label { Text = "WWII Local Play Loadout Editor", AutoSize = true, ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 14f), Margin = Padding.Empty });
+            titles.Controls.Add(new Label { Text = "WWII Local Play Unlocker", AutoSize = true, ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 14f), Margin = Padding.Empty });
             titles.Controls.Add(new Label { Text = "v" + AppVersion + "  ·  made by " + Author + "  ·  Offline / Local Play only", AutoSize = true, ForeColor = HeaderSubText, Margin = new Padding(2, 0, 0, 0) });
             lblStatus = new Label { AutoSize = true, Anchor = AnchorStyles.Right, Padding = new Padding(12, 6, 12, 6), Font = new Font("Segoe UI Semibold", 9.5f) };
             SetStatus("Not connected", false);
@@ -936,7 +936,7 @@ namespace LocalPlayLoadout
             Controls.Add(logPanel);
             Controls.Add(header);
 
-            Log("WWII Local Play Loadout Editor " + AppVersion + " - made by " + Author + ". Offline / Local Play only.");
+            Log("WWII Local Play Unlocker " + AppVersion + " - made by " + Author + ". Offline / Local Play only.");
             DisableWheelOnValueFields(this);
             LoadItemsFromDisk();
 

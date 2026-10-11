@@ -1,6 +1,6 @@
 <p align="center"><img src="icon.png" width="96" alt="icon"></p>
 
-<h1 align="center">WWII Local Play Loadout Editor</h1>
+<h1 align="center">WWII Local Play Unlocker</h1>
 
 <p align="center">
 Use <b>every</b> weapon, camo, attachment, charm and perk in <b>Call of Duty: WWII Local Play</b> (offline LAN / split-screen),<br>
@@ -57,14 +57,14 @@ writing anything.
 
 ## Download
 
-Get `WW2_LocalPlay_Loadout_Editor.exe` from the [Releases](../../releases) page, or build it yourself (below).
+Get `WW2_LocalPlay_Unlocker.exe` from the [Releases](../../releases) page, or build it yourself (below).
 
 > Antivirus programs often flag tools that write into another program's memory, and Windows Defender may delete
 > this exe. The full source is in this repository. If that happens, add an exclusion for the tool's folder.
 
 ## Usage
 
-1. Put `WW2_LocalPlay_Loadout_Editor.exe` anywhere you like; the game folder is convenient.
+1. Put `WW2_LocalPlay_Unlocker.exe` anywhere you like; the game folder is convenient.
 2. Start the game and wait for the main menu, then start the tool. It connects automatically (the badge at the
    top right turns green), or you can press **Connect to game** in the sidebar.
 3. Press **Load full item list from game** in the sidebar once. This saves `statstable_full.csv` next to the tool
@@ -127,7 +127,7 @@ Field keys: `primary`, `secondary`, `primaryCamo`, `primaryGrip`, `primaryCharm`
 ## Building
 
 You don't need Visual Studio or any SDK. Double-click **`build.bat`**. It uses the C# compiler that comes with
-Windows (.NET Framework 4) and writes `WW2_LocalPlay_Loadout_Editor.exe` next to the source.
+Windows (.NET Framework 4) and writes `WW2_LocalPlay_Unlocker.exe` next to the source.
 `tools/make_icon.py` regenerates the icon (needs Pillow).
 
 ## Known limitations
