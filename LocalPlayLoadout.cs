@@ -619,6 +619,91 @@ namespace LocalPlayLoadout
             return changed;
         }
 
+        // Weapon variants in Local Play: the weapon list's click handler (ui/s2/cac_edit_weapon_uc.lua) equips the base
+        // weapon straight away when "... or CONDITIONS.IsPreLaunchDemo() or CONDITIONS.IsE3Build() or
+        // CONDITIONS.IsSystemLink() or CONDITIONS.IsRankedPlay() or CONDITIONS.IsMLGMatch()" is true, so the variant menu
+        // (cac_edit_weapon_variant) never opens in Local Play. That function's constant "IsSystemLink" (the only constant
+        // table with this exact neighbour sequence) is pointed at the game's own "AlwaysFalse" string; clicking a weapon
+        // then opens the variant list like online. With the unlock-all fix the variants are unlocked and equip normally.
+        static readonly string[] VariantMenuNames = { "IsPreLaunchDemo", "IsE3Build", "IsSystemLink", "IsRankedPlay", "IsMLGMatch", "AlwaysFalse" };
+
+        public class VariantMenuPatch
+        {
+            public long PreLaunch, E3, SystemLink, Ranked, Mlg, AlwaysFalse;
+            public List<long> Slots = new List<long>();
+        }
+
+        public VariantMenuPatch FindVariantMenu(VariantMenuPatch previous, out string error)
+        {
+            error = null;
+            Dictionary<string, List<long>> s;
+            if (previous != null && IsLuaString(previous.PreLaunch, "IsPreLaunchDemo") && IsLuaString(previous.E3, "IsE3Build")
+                && IsLuaString(previous.SystemLink, "IsSystemLink") && IsLuaString(previous.Ranked, "IsRankedPlay")
+                && IsLuaString(previous.Mlg, "IsMLGMatch") && IsLuaString(previous.AlwaysFalse, "AlwaysFalse"))
+            {
+                s = new Dictionary<string, List<long>> {
+                    { "IsPreLaunchDemo", new List<long> { previous.PreLaunch } }, { "IsE3Build", new List<long> { previous.E3 } },
+                    { "IsSystemLink", new List<long> { previous.SystemLink } }, { "IsRankedPlay", new List<long> { previous.Ranked } },
+                    { "IsMLGMatch", new List<long> { previous.Mlg } }, { "AlwaysFalse", new List<long> { previous.AlwaysFalse } } };
+            }
+            else s = FindLuaStrings(VariantMenuNames);
+            foreach (string n in VariantMenuNames)
+                if (s[n].Count == 0) { error = "menu string \"" + n + "\" not found - wait for the main menu"; return null; }
+
+            VariantMenuPatch p = new VariantMenuPatch();
+            HashSet<long> pre = new HashSet<long>(s["IsPreLaunchDemo"]), e3 = new HashSet<long>(s["IsE3Build"]),
+                sys = new HashSet<long>(s["IsSystemLink"]), ranked = new HashSet<long>(s["IsRankedPlay"]),
+                mlg = new HashSet<long>(s["IsMLGMatch"]), af = new HashSet<long>(s["AlwaysFalse"]);
+            long heapStart, heapEnd, lo = s["IsSystemLink"].Min(), hi = s["IsSystemLink"].Max() + 8;
+            if (RegionAround(s["IsSystemLink"][0], out heapStart, out heapEnd)) { lo = heapStart; hi = heapEnd; }
+            Action<long, long> scan = (from, to) => ScanMemory(from, to, 0x40, delegate(byte[] buf, int len, long baseAddr)
+            {
+                int skew = (int)((8 - (baseAddr & 7)) & 7);
+                for (int i = skew + 0x20; i + 0x30 <= len; i += 0x8)
+                {
+                    long cur = BitConverter.ToInt64(buf, i);
+                    if (!sys.Contains(cur) && !af.Contains(cur)) continue;
+                    if ((buf[i + 8] & 0xF) != 4) continue;
+                    long a = BitConverter.ToInt64(buf, i - 0x20), b = BitConverter.ToInt64(buf, i - 0x10),
+                        c = BitConverter.ToInt64(buf, i + 0x10), d = BitConverter.ToInt64(buf, i + 0x20);
+                    if (!pre.Contains(a) || !e3.Contains(b) || !ranked.Contains(c) || !mlg.Contains(d)) continue;
+                    if (!p.Slots.Contains(baseAddr + i)) p.Slots.Add(baseAddr + i);
+                    p.PreLaunch = a; p.E3 = b; p.Ranked = c; p.Mlg = d;
+                }
+                return true;
+            });
+            scan(lo, hi);
+            if (p.Slots.Count == 0)
+            {
+                List<long> all = s.Values.SelectMany(l => l).ToList();
+                scan(Math.Max(0x10000, all.Min() - 0x40000000), all.Max() + 0x40000000);
+            }
+            if (p.Slots.Count == 0) { error = "weapon menu not found - open Local Play first"; return null; }
+            p.SystemLink = Nearest(s["IsSystemLink"], p.Slots[0]);
+            p.AlwaysFalse = Nearest(s["AlwaysFalse"], p.Slots[0]);
+            return p;
+        }
+
+        // Returns how many constants were changed, or -1 when a slot no longer holds the handler's constants (the menu
+        // scripts were reloaded somewhere else) and FindVariantMenu has to run again.
+        public int ApplyVariantMenu(VariantMenuPatch p)
+        {
+            int changed = 0;
+            foreach (long slot in p.Slots)
+            {
+                byte[] b = Read(slot - 0x20, 0x50);
+                if (b == null) return -1;
+                long cur = BitConverter.ToInt64(b, 0x20);
+                if (BitConverter.ToInt64(b, 0) != p.PreLaunch || BitConverter.ToInt64(b, 0x10) != p.E3
+                    || BitConverter.ToInt64(b, 0x30) != p.Ranked || BitConverter.ToInt64(b, 0x40) != p.Mlg
+                    || (cur != p.SystemLink && cur != p.AlwaysFalse)) return -1;
+                if (cur == p.AlwaysFalse) continue;
+                if (!Write(slot, BitConverter.GetBytes(p.AlwaysFalse))) return -1;
+                changed++;
+            }
+            return changed;
+        }
+
         public byte[] ReadPrivateLoadouts(HashSet<uint> knownIds, int[] checkOffsets, out string error)
         {
             error = null;
@@ -697,7 +782,14 @@ namespace LocalPlayLoadout
 
     class MainForm : Form
     {
-        public const string AppVersion = "1.3", Author = "Petsox";
+        public const string AppVersion = "1.4", Author = "Petsox";
+#if LITE
+        // Lite build (build.bat: /define:LITE): only what every player needs - no host-only features (party modes,
+        // hidden maps), no dev & hidden items, no raw console command, no "online ranked" target, no "no restrictions".
+        public const string AppName = "WWII Local Play Unlocker Lite";
+#else
+        public const string AppName = "WWII Local Play Unlocker";
+#endif
         const int Col0 = 0, ColRef = 1, ColName = 2, ColIcon = 4, ColId = 18;
         static readonly string[] GunTypes = { "weapon_assault", "weapon_smg", "weapon_heavy", "weapon_lmg", "weapon_sniper", "weapon_shotgun", "weapon_pistol", "weapon_projectile" };
 
@@ -754,11 +846,16 @@ namespace LocalPlayLoadout
 
         public MainForm()
         {
-            Text = "WWII Local Play Unlocker " + AppVersion + "  -  made by " + Author;
+            Text = AppName + " " + AppVersion + "  -  made by " + Author;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             Font = new Font("Segoe UI", 9f);
+#if LITE
+            Width = 980; Height = 470;
+            MinimumSize = new Size(820, 480);
+#else
             Width = 1280; Height = 1020;
             MinimumSize = new Size(1000, 700);
+#endif
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = BodyBack;
 
@@ -767,7 +864,7 @@ namespace LocalPlayLoadout
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             FlowLayoutPanel titles = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
-            titles.Controls.Add(new Label { Text = "WWII Local Play Unlocker", AutoSize = true, ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 14f), Margin = Padding.Empty });
+            titles.Controls.Add(new Label { Text = AppName, AutoSize = true, ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 14f), Margin = Padding.Empty });
             titles.Controls.Add(new Label { Text = "v" + AppVersion + "  ·  made by " + Author + "  ·  Offline / Local Play only", AutoSize = true, ForeColor = HeaderSubText, Margin = new Padding(2, 0, 0, 0) });
             lblStatus = new Label { AutoSize = true, Anchor = AnchorStyles.Right, Padding = new Padding(12, 6, 12, 6), Font = new Font("Segoe UI Semibold", 9.5f) };
             SetStatus("Not connected", false);
@@ -785,20 +882,30 @@ namespace LocalPlayLoadout
             toolTip.SetToolTip(bPartyModes, "Shows the game's hidden \"Party Modes\" group (Prop Hunt, Gun Game, Spy, Dogfight, Dogfight FFA)\nin Game Setup -> Mode, in place of \"Esports Modes\". Only the host needs this.\nMemory only; re-applied automatically after every match while this tool stays open. Click again to get Esports Modes back.");
             bUnlockAll = SideButton("Unlock everything in game menus");
             bUnlockAll.Click += delegate { UnlockAllClicked(); };
-            toolTip.SetToolTip(bUnlockAll, "Unlocks every weapon, melee weapon, camo (incl. Challenges camos), charm and reticle in the game's own Local Play menus.\nMemory only: undone by restarting the game; re-applied automatically while this tool stays open.");
+            toolTip.SetToolTip(bUnlockAll, "Unlocks every weapon (incl. all variants: click a weapon to pick one), melee weapon, camo (incl. Challenges camos), charm and reticle in the game's own Local Play menus.\nMemory only: undone by restarting the game; re-applied automatically while this tool stays open.");
+#if LITE
+            side.Controls.AddRange(new Control[] { bConnect, bUnlockAll });
+#else
             side.Controls.AddRange(new Control[] { bConnect, bPartyModes, bUnlockAll });
             side.Controls.Add(Hint("Party modes: Prop Hunt and more under Game Setup → Mode (host only). Green = on."));
+#endif
             side.Controls.Add(Caption("ITEM LIST"));
             bDump = SideButton("Load full item list from game");
             bDump.Click += delegate { DumpTable(); };
             toolTip.SetToolTip(bDump, "Reads every weapon, camo and attachment from the game. Needed once; saved next to the tool.");
             side.Controls.Add(bDump);
             lblItems = Hint("");
-            side.Controls.Add(lblItems);
+#if !LITE
+            side.Controls.Add(lblItems);   // Lite: the amber item list button already shows whether the list is loaded
+#endif
 
             // ---- tab 1: class editor ----
             TabControl tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(16, 5) };
+#if LITE
+            TabPage tabClass = new TabPage("Classes") { UseVisualStyleBackColor = false, BackColor = BodyBack };
+#else
             TabPage tabClass = new TabPage("Class editor") { UseVisualStyleBackColor = false, BackColor = BodyBack };
+#endif
             TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(6), AutoScroll = true, BackColor = BodyBack };
             rootPanel = root;
             tabClass.Controls.Add(root);
@@ -822,12 +929,22 @@ namespace LocalPlayLoadout
             toolTip.SetToolTip(bLoad, "Reads the selected Local Play class from the game and fills in every field.");
             Button bReset = new Button { Text = "Reset all slots to (keep current)", AutoSize = true };
             bReset.Click += delegate { foreach (ComboBox c in allSlots) if (c.Items.Count > 0) c.SelectedIndex = 0; chkLethalCount.Checked = chkTacticalCount.Checked = false; };
+#if LITE
+            // Lite: Export reads the selected class straight from the game, Import writes a file straight into it.
+            Button bExport = new Button { Text = "Export class to file...", AutoSize = true };
+            bExport.Click += delegate { LiteExport(); };
+            Button bImport = new Button { Text = "Import class from file...", AutoSize = true };
+            bImport.Click += delegate { LiteImport(); };
+            toolTip.SetToolTip(bExport, "Reads the selected class from the game and saves it as a .json file you can share.");
+            toolTip.SetToolTip(bImport, "Loads a .json class file and writes it straight into the selected class in the game.");
+#else
             Button bExport = new Button { Text = "Export class...", AutoSize = true };
             bExport.Click += delegate { ExportClass(); };
             Button bImport = new Button { Text = "Import class...", AutoSize = true };
             bImport.Click += delegate { ImportClass(); };
             toolTip.SetToolTip(bExport, "Saves the fields below to a .json file you can share.");
             toolTip.SetToolTip(bImport, "Fills the fields below from a .json file. Click \"Apply to class\" afterwards to put it in the game.");
+#endif
             foreach (Button b in new[] { bApply, bLoad, bReset, bExport, bImport }) StyleButton(b);
             bApply.BackColor = HeaderBack; bApply.ForeColor = Color.White;
             bApply.FlatAppearance.BorderColor = HeaderBack; bApply.FlatAppearance.MouseOverBackColor = Color.FromArgb(60, 66, 76);
@@ -838,16 +955,39 @@ namespace LocalPlayLoadout
 
             TableLayoutPanel classCard = Card(root, "Class", null, 100);
             FlowLayoutPanel pick = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+#if LITE
+            cbClass.Width = 280;
+            pick.Controls.Add(cbClass);
+#else
             pick.Controls.AddRange(new Control[] { cbClass, new Label { Text = "Apply to:", AutoSize = true, Margin = new Padding(18, 7, 3, 0) }, cbTarget });
+#endif
             AddRow(classCard, "Custom class:", pick);
             FlowLayoutPanel actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 2) };
+#if LITE
+            actions.Controls.AddRange(new Control[] { bExport, bImport });
+#else
             actions.Controls.AddRange(new Control[] { bApply, bLoad, bReset, bExport, bImport });
+#endif
             AddRow(classCard, "", actions);
             FlowLayoutPanel options = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+#if LITE
+            // weapon variants are picked in the game's own menu (Unlock everything -> click a weapon), no checkbox needed
+            options.FlowDirection = FlowDirection.TopDown;
+            options.Controls.Add(new Label { Text = "Export reads the selected class from the game and saves it. Import writes a class file straight into the selected class.", AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = CaptionText, Margin = new Padding(3, 6, 3, 0) });
+            options.Controls.Add(new Label { Text = "Weapons, variants, camos and more: press \"Unlock everything in game menus\", then pick them in the game's Soldier -> Divisions menu.", AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = CaptionText, Margin = new Padding(3, 4, 3, 0) });
+            AddRow(classCard, "", options);
+#else
             options.Controls.AddRange(new Control[] { chkVariants, chkAll });
             AddRow(classCard, "Options:", options);
+#endif
 
-            TableLayoutPanel weapons = TwoColumns(root);
+#if LITE
+            // Lite: the weapon / equipment / perk fields still exist (export and import go through them) but are not shown
+            TableLayoutPanel cardsHost = new TableLayoutPanel { ColumnCount = 1 };
+#else
+            TableLayoutPanel cardsHost = root;
+#endif
+            TableLayoutPanel weapons = TwoColumns(cardsHost);
             TableLayoutPanel pg = Card(weapons, "Primary weapon", LoadButton("Load primary from game", LoadScope.Primary), 100);
             cbPrimary = Slot(pg, "Weapon:");
             cbPriCamo = Slot(pg, "Camo:");
@@ -861,7 +1001,7 @@ namespace LocalPlayLoadout
             cbSecCharm = Slot(sg, "Charm:");
             for (int i = 0; i < AttachmentSlots; i++) cbSecAtt[i] = Slot(sg, "Attachment " + (i + 1) + ":");
 
-            TableLayoutPanel lower = TwoColumns(root);
+            TableLayoutPanel lower = TwoColumns(cardsHost);
             TableLayoutPanel eg = Card(lower, "Equipment", null, 100);
             cbLethal = Slot(eg, "Lethal:");
             cbTactical = Slot(eg, "Tactical:");
@@ -883,6 +1023,7 @@ namespace LocalPlayLoadout
             root.Controls.Add(new Panel { Height = 0, Margin = Padding.Empty });   // takes the spare height so the last cards don't stretch
             tabs.TabPages.Add(tabClass);
 
+#if !LITE
             // ---- tab 2: dev & hidden items, raw command ----
             TabPage tabDev = new TabPage("Dev & hidden items") { UseVisualStyleBackColor = false, BackColor = BodyBack };
             TableLayoutPanel devRoot = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(6), AutoScroll = true, BackColor = BodyBack };
@@ -921,6 +1062,7 @@ namespace LocalPlayLoadout
             AddRow(rg, "Command:", raw);
             devRoot.Controls.Add(new Panel { Height = 0, Margin = Padding.Empty });
             tabs.TabPages.Add(tabDev);
+#endif
 
             // ---- log, always visible ----
             Panel logPanel = new Panel { Dock = DockStyle.Bottom, Height = 125, Padding = new Padding(10, 0, 10, 10), BackColor = BodyBack };
@@ -933,10 +1075,12 @@ namespace LocalPlayLoadout
             // docking is applied from the last added control: header, then log, then sidebar, then the tabs fill the rest
             Controls.Add(tabs);
             Controls.Add(side);
-            Controls.Add(logPanel);
+#if !LITE
+            Controls.Add(logPanel);   // Lite has no log; Export / Import failures are shown in a message box
+#endif
             Controls.Add(header);
 
-            Log("WWII Local Play Unlocker " + AppVersion + " - made by " + Author + ". Offline / Local Play only.");
+            Log(AppName + " " + AppVersion + " - made by " + Author + ". Offline / Local Play only.");
             DisableWheelOnValueFields(this);
             LoadItemsFromDisk();
 
@@ -949,12 +1093,21 @@ namespace LocalPlayLoadout
             };
             auto.Start();
 
+            System.Windows.Forms.Timer variants = new System.Windows.Forms.Timer { Interval = 1500 };
+            variants.Tick += delegate
+            {
+                try { VariantMenuTick(); } catch (Exception ex) { Log("Weapon variants: " + ex.Message); }
+            };
+            variants.Start();
+
+#if !LITE
             System.Windows.Forms.Timer party = new System.Windows.Forms.Timer { Interval = 1500 };
             party.Tick += delegate
             {
                 try { PartyModesTick(); } catch (Exception ex) { Log("Party modes: " + ex.Message); }
             };
             party.Start();
+#endif
         }
 
         // Party modes in the Local Play Mode menu (see Game.FindPartyMenu). The menu scripts are reloaded after every
@@ -1159,9 +1312,14 @@ namespace LocalPlayLoadout
             grid.Controls.Add(c);
         }
 
+        string lastLog = "", lastFailure = "";
+        int failures;
+
         void Log(string s)
         {
             if (InvokeRequired) { BeginInvoke(new Action<string>(Log), s); return; }
+            lastLog = s;
+            if (s.StartsWith("FAILED")) { lastFailure = s; failures++; }
             txtLog.AppendText(s + Environment.NewLine);
         }
 
@@ -1512,6 +1670,63 @@ namespace LocalPlayLoadout
 
         bool unlockWanted;
 
+        // Weapon variants in the game's own menu (see Game.FindVariantMenu): part of "Unlock everything". The menu
+        // scripts are reloaded after every match, so the patch is checked every 1.5 s and re-applied; when the menu has
+        // moved, a background search runs again (backing off up to 2 minutes, e.g. during a match).
+        Game.VariantMenuPatch variantMenu;
+        int variantPid, variantScanDelay = 10;
+        bool variantScanBusy, variantShown, variantFailLogged;
+        DateTime variantNextScan = DateTime.MinValue;
+
+        void VariantMenuTick()
+        {
+            if (!unlockWanted || variantScanBusy || game == null || game.HasExited) return;
+            if (variantMenu != null && variantPid == game.Proc.Id)
+            {
+                int n = game.ApplyVariantMenu(variantMenu);
+                if (n >= 0)
+                {
+                    if (n > 0)
+                    {
+                        Log(variantShown ? "Weapon variants re-applied (the game reloaded its menus)."
+                            : "Weapon variants enabled: clicking a weapon in Soldier -> Divisions now opens its variant list.");
+                        variantShown = true;
+                    }
+                    return;
+                }
+            }
+            if (DateTime.Now < variantNextScan) return;
+            variantNextScan = DateTime.Now.AddSeconds(variantScanDelay);
+            variantScanBusy = true;
+            Game g = game;
+            Game.VariantMenuPatch previous = variantPid == g.Proc.Id ? variantMenu : null;
+            Thread t = new Thread(delegate()
+            {
+                string err;
+                Game.VariantMenuPatch p;
+                try { p = g.FindVariantMenu(previous, out err); } catch (Exception ex) { p = null; err = ex.Message; }
+                BeginInvoke((Action)delegate
+                {
+                    variantScanBusy = false;
+                    if (g != game) return;
+                    if (p == null)
+                    {
+                        variantScanDelay = Math.Min(variantScanDelay * 2, 120);
+                        if (!variantFailLogged) Log("Weapon variants: " + err + ". Retrying in the background.");
+                        variantFailLogged = true;
+                        return;
+                    }
+                    variantScanDelay = 10;
+                    variantFailLogged = false;
+                    if (variantPid != g.Proc.Id) variantShown = false;
+                    variantMenu = p;
+                    variantPid = g.Proc.Id;
+                    VariantMenuTick();
+                });
+            }) { IsBackground = true };
+            t.Start();
+        }
+
         void UnlockAllClicked()
         {
             if (!EnsureConnected()) return;
@@ -1521,6 +1736,9 @@ namespace LocalPlayLoadout
             Cursor = Cursors.Default;
             if (err != null) Log("Unlock-all FAILED (" + err + ").");
             else { bUnlockAll.Text = "Everything unlocked (until game restart)"; bUnlockAll.ForeColor = Color.DarkGreen; }
+            variantNextScan = DateTime.MinValue;
+            variantScanDelay = 10;
+            VariantMenuTick();
         }
 
         // Unlocks everything in the game's own menus for Local Play (memory only, re-applied on every connect):
@@ -1849,13 +2067,13 @@ namespace LocalPlayLoadout
             return sb.ToString();
         }
 
-        void ExportClass()
+        bool ExportClass()
         {
             string className = cbClass.SelectedItem as string ?? "Class";
             string suggested = className.Contains(" - ") ? className.Substring(className.IndexOf(" - ") + 3).Trim() : className;
             using (SaveFileDialog dlg = new SaveFileDialog { Filter = "WWII class (*.json)|*.json", InitialDirectory = LoadoutFolder(), FileName = string.Concat(suggested.Split(Path.GetInvalidFileNameChars())) + ".json" })
             {
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                if (dlg.ShowDialog(this) != DialogResult.OK) return false;
                 StringBuilder sb = new StringBuilder();
                 sb.AppendLine("{");
                 sb.AppendLine("  \"format\": \"ww2-localplay-class\",");
@@ -1876,23 +2094,24 @@ namespace LocalPlayLoadout
                 sb.AppendLine("}");
                 File.WriteAllText(dlg.FileName, sb.ToString(), Encoding.UTF8);
                 Log("Exported " + lines.Count + " fields to " + dlg.FileName);
+                return true;
             }
         }
 
-        void ImportClass()
+        bool ImportClass()
         {
             using (OpenFileDialog dlg = new OpenFileDialog { Filter = "WWII class (*.json)|*.json|All files (*.*)|*.*", InitialDirectory = LoadoutFolder() })
             {
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                if (dlg.ShowDialog(this) != DialogResult.OK) return false;
                 Dictionary<string, object> root;
                 try
                 {
                     root = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(dlg.FileName));
                 }
-                catch (Exception ex) { Log("Import FAILED: not a valid class file (" + ex.Message + ")"); return; }
+                catch (Exception ex) { Log("Import FAILED: not a valid class file (" + ex.Message + ")"); return false; }
                 object fo;
                 Dictionary<string, object> fields = root.TryGetValue("fields", out fo) ? fo as Dictionary<string, object> : null;
-                if (fields == null) { Log("Import FAILED: the file has no \"fields\" section."); return; }
+                if (fields == null) { Log("Import FAILED: the file has no \"fields\" section."); return false; }
 
                 Func<object, uint?> idOf = o =>
                 {
@@ -1922,10 +2141,45 @@ namespace LocalPlayLoadout
                 chkTacticalCount.Checked = root.TryGetValue("extraTactical", out v2) && v2 != null;
                 if (chkTacticalCount.Checked) numTactical.Value = Math.Min(numTactical.Maximum, Convert.ToDecimal(v2));
                 object nm;
+#if LITE
+                Log(string.Format("Imported {0} fields from {1}{2}.",
+                    set, Path.GetFileName(dlg.FileName), root.TryGetValue("name", out nm) && nm != null ? " (" + nm + ")" : ""));
+#else
                 Log(string.Format("Imported {0} fields from {1}{2}. Pick the target class and click \"Apply to class\".",
                     set, Path.GetFileName(dlg.FileName), root.TryGetValue("name", out nm) && nm != null ? " (" + nm + ")" : ""));
+#endif
+                return true;
             }
         }
+
+#if LITE
+        // Export: read the selected class from the game (every field, extra equipment counts included), then save it.
+        void LiteExport()
+        {
+            if (!LoadClassFromGame(LoadScope.All)) { LiteError("Export"); return; }
+            chkLethalCount.Checked = chkTacticalCount.Checked = true;
+            ExportClass();
+        }
+
+        // Lite has no log: show why Export / Import didn't work.
+        void LiteError(string what)
+        {
+            MessageBox.Show(this, lastLog, what + " failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        // Import: fill the (hidden) fields from a file, then write them straight into the selected class.
+        void LiteImport()
+        {
+            if (!EnsureConnected()) { LiteError("Import"); return; }
+            string before = lastLog;
+            if (!ImportClass()) { if (lastLog != before) LiteError("Import"); return; }   // cancelling the file dialog is not an error
+            int failed = failures;
+            Apply();
+            if (failures != failed) { MessageBox.Show(this, lastFailure, "Import failed", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            MessageBox.Show(this, "The class was written into " + cbClass.SelectedItem + ".\nRe-open the class in the game's Divisions menu to see it.",
+                "Import", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+#endif
 
         enum LoadScope { All, Primary, Secondary }
 
@@ -1941,16 +2195,16 @@ namespace LocalPlayLoadout
 
         // Reads the selected Local Play class from the game. Scope Primary/Secondary fills only that weapon's column
         // and leaves every other field as it is.
-        void LoadClassFromGame(LoadScope scope)
+        bool LoadClassFromGame(LoadScope scope)
         {
-            if (!EnsureConnected()) return;
+            if (!EnsureConnected()) return false;
             if (cbTarget.SelectedIndex != 0) Log("Note: loading reads the Local Play classes.");
             HashSet<uint> known = new HashSet<uint>(items.Where(i => i.Id > 0xFFFF).Select(i => i.Id));
             Cursor = Cursors.WaitCursor;
             string err;
             byte[] data = game.ReadPrivateLoadouts(known, LoadoutCheckOffsets(), out err);
             Cursor = Cursors.Default;
-            if (data == null) { Log("Load FAILED: " + err); return; }
+            if (data == null) { Log("Load FAILED: " + err); return false; }
 
             // class names into the class list
             int selected = cbClass.SelectedIndex;
@@ -1997,6 +2251,7 @@ namespace LocalPlayLoadout
             }
             string what = scope == LoadScope.All ? "" : (scope == LoadScope.Primary ? "primary weapon of " : "secondary weapon of ");
             Log(string.Format("Loaded {0}{1} from the game.{2}", what, cbClass.Items[cls], reticles));
+            return true;
         }
 
         // Selects the item with this ID; 0 = "(empty / none)". Items not offered in this slot are added so the
