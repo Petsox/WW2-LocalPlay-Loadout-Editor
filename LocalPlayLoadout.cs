@@ -52,6 +52,8 @@ namespace LocalPlayLoadout
         public static extern bool VirtualProtectEx(IntPtr h, IntPtr addr, IntPtr size, uint newProtect, out uint oldProtect);
         [DllImport("kernel32.dll")]
         public static extern bool FlushInstructionCache(IntPtr h, IntPtr addr, IntPtr size);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr VirtualAllocEx(IntPtr h, IntPtr addr, IntPtr size, uint type, uint protect);
     }
 
     class Game : IDisposable
@@ -135,6 +137,15 @@ namespace LocalPlayLoadout
         {
             IntPtr written;
             return Native.WriteProcessMemory(handle, new IntPtr(addr), data, new IntPtr(data.Length), out written) && written.ToInt64() == data.Length;
+        }
+
+        // Copies a NUL-terminated UTF-8 string into new memory in the game; returns its address (0 on failure).
+        public long AllocString(string text)
+        {
+            byte[] b = Encoding.UTF8.GetBytes(text + "\0");
+            IntPtr mem = Native.VirtualAllocEx(handle, IntPtr.Zero, new IntPtr(b.Length), 0x3000, 0x04);   // MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE
+            if (mem == IntPtr.Zero || !Write(mem.ToInt64(), b)) return 0;
+            return mem.ToInt64();
         }
 
         public delegate bool ChunkVisitor(byte[] buf, int len, long baseAddr);
@@ -782,7 +793,7 @@ namespace LocalPlayLoadout
 
     class MainForm : Form
     {
-        public const string AppVersion = "1.4", Author = "Petsox";
+        public const string AppVersion = "1.5", Author = "Petsox";
 #if LITE
         // Lite build (build.bat: /define:LITE): only what every player needs - no host-only features (party modes,
         // hidden maps), no dev & hidden items, no raw console command, no "online ranked" target, no "no restrictions".
@@ -1747,6 +1758,7 @@ namespace LocalPlayLoadout
         //  - weapon rows get a Challenge value: system link only lets MTX weapons be equipped if they have one
         //  - per-weapon camos ("stg44 gold") get the challenge of that weapon's greenspot row: offline the menu hides
         //    camos with mastery / tier challenges from the Challenges tab
+        //  - weapon pack killswitch dvars off, hidden rarity copies of weapon variants shown (ShowHiddenVariants)
         int unlockPid;
         const int UnlockCols = 12, UnlockRefCol = 0, UnlockTypeCol = 1, UnlockChallengeCol = 3, UnlockLanCol = 10;
 
@@ -1790,12 +1802,78 @@ namespace LocalPlayLoadout
             return moved;
         }
 
+        // Every weapon skin has two rarity copies (the game adds "I" / "II" to the name from the last digit of the ID). About a
+        // third of them have ShowInArmory (column 22) = 0 and are left out of the variant menu; set it to 1.
+        const int StatsNameCol = 1, StatsRefCol = 2, StatsIdCol = 18, StatsShowInArmoryCol = 22;
+        static readonly string[] VariantTypes = { "weapon_assault", "weapon_smg", "weapon_heavy", "weapon_sniper", "weapon_shotgun", "weapon_pistol", "weapon_projectile", "weapon_other" };
+
+        // Easter egg: Blyskawica "Shredder II" (0x1085202) becomes "Petsoxuv Milacek" (Czech). The game adds "II" itself (from the last digit of the ID).
+        const string EggId = "0x1085202", EggName = "Petsox\u016Fv Mil\u00E1\u010Dek";
+
+        int ShowHiddenVariants()
+        {
+            int rows; long cells;
+            if (!game.FindStringTable("mp/statstable.csv", StatsCols, out rows, out cells)) { Log("Variants: stats table not found."); return 0; }
+            byte[] st = game.Read(cells, rows * StatsCols * CellSize);
+            if (st == null) return 0;
+            Dictionary<long, string> cache = new Dictionary<long, string>();
+            Func<int, int, string> cell = (r, c) =>
+            {
+                long p = BitConverter.ToInt64(st, (r * StatsCols + c) * CellSize);
+                string v;
+                if (!cache.TryGetValue(p, out v)) { v = p == 0 ? "" : (game.ReadCString(p, 64) ?? ""); cache[p] = v; }
+                return v;
+            };
+            Func<int, int, byte[]> get = (r, c) =>
+            {
+                byte[] b = new byte[CellSize];
+                Array.Copy(st, (r * StatsCols + c) * CellSize, b, 0, CellSize);
+                return b;
+            };
+            Action<int, int, byte[]> put = (r, c, src) => Array.Copy(src, 0, st, (r * StatsCols + c) * CellSize, CellSize);
+
+            byte[] showDonor = null;
+            int egg = -1;
+            for (int r = 1; r < rows; r++)
+            {
+                if (showDonor == null && Array.IndexOf(VariantTypes, cell(r, StatsTypeCol)) >= 0 && cell(r, StatsRefCol).Contains("_loot") && cell(r, StatsShowInArmoryCol) == "1")
+                    showDonor = get(r, StatsShowInArmoryCol);
+                if (cell(r, StatsIdCol) == EggId) egg = r;
+            }
+            if (showDonor == null) return 0;
+            int shown = 0;
+            for (int r = 1; r < rows; r++)
+            {
+                if (Array.IndexOf(VariantTypes, cell(r, StatsTypeCol)) < 0 || !cell(r, StatsRefCol).Contains("_loot")) continue;
+                if (cell(r, StatsShowInArmoryCol) == "1") continue;
+                put(r, StatsShowInArmoryCol, showDonor);
+                shown++;
+            }
+            bool eggDone = false;
+            if (egg > 0 && cell(egg, StatsNameCol).StartsWith("WEAPON_"))
+            {
+                long name = game.AllocString(EggName);
+                if (name != 0)
+                {
+                    Array.Copy(BitConverter.GetBytes(name), 0, st, (egg * StatsCols + StatsNameCol) * CellSize, 8);
+                    eggDone = true;
+                }
+            }
+            if ((shown > 0 || eggDone) && !game.PatchCode(cells, st)) { Log("Variants: write failed."); return 0; }
+            return shown;
+        }
+
+        // Each weapon pack (mtx3 .. mtx12) has a killswitch dvar; when it is on, the menu drops that pack's weapons
+        // (Blyskawica, Erma, Austen, ...).
+        static readonly string[] MtxKillswitches = { "mtx3", "mtx3_5", "mtx4", "mtx5", "mtx6", "mtx7", "mtx8", "mtx9", "mtx10", "mtx11", "mtx12" };
+
         string TryApplyUnlockAll()
         {
             string err;
             if (!game.SendCommand("set 709 1", out err)) return "could not send 'set 709 1': " + err;
             // dvar 5887 shows Carentan (winter) in the Local Play / private match map list
             game.SendCommand("set 5887 1", out err);
+            foreach (string k in MtxKillswitches) game.SendCommand("set " + k + "_killswitch 0", out err);
 
             int rows; long cells;
             if (!game.FindStringTable("mp/unlocktable.csv", UnlockCols, out rows, out cells)) return "unlock table not found - wait for the main menu and press Connect again";
@@ -1847,8 +1925,9 @@ namespace LocalPlayLoadout
             }
             if (lan + weapons + camos > 0 && !game.PatchCode(cells, arr)) return "write failed";
             int special = MoveLootCamosToSpecialTab();
+            int variants = ShowHiddenVariants();
             unlockPid = game.Proc.Id;
-            Log(string.Format("Unlock-all applied: dev unlock switch on, {0} items unlocked for Local Play, {1} weapons made equippable, {2} challenge camos made visible, {3} loot camos moved into the Special tab. Re-open the Divisions menu to see it.", lan, weapons, camos, special));
+            Log(string.Format("Unlock-all applied: dev unlock switch on, weapon packs enabled, {0} items unlocked for Local Play, {1} weapons made equippable, {2} challenge camos made visible, {3} loot camos moved into the Special tab, {4} hidden weapon variants shown. Re-open the Divisions menu to see it.", lan, weapons, camos, special, variants));
             return null;
         }
 
